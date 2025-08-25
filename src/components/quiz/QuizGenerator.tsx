@@ -1,0 +1,215 @@
+import { useState } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import TabUploadContent from './TabUploadContent';
+import TabCustomizeContent from './TabCustomizeContent';
+import TabPreviewContent from './TabPreviewContent';
+import { QuizQuestion } from '@/services/quizService';
+import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/context/AuthContext';
+import { nanoid } from 'nanoid';
+import { useNavigate } from 'react-router-dom';
+
+
+interface QuizGeneratorProps {
+  onPublish?: (quizData: any) => void;
+}
+
+// Generate a short code similar to Quizizz
+const makeCode = () => nanoid(6).toUpperCase();
+
+// Map the UI question shape -> DB row for public.quiz_questions
+function mapQuestionToDBRow(q: any, quizId: string, index: number) {
+  const type = q.type === 'essay' ? 'short_answer' : q.type;
+
+  let options: any = null;
+  let correct: any = null;
+
+  if (type === 'mcq') {
+    const choices = Array.isArray(q.choices) ? q.choices : [];
+    options = choices;                 // jsonb array of strings
+    correct = q.answer || '';          // store the TEXT of the correct choice
+  } else if (type === 'true_false') {
+    options = null;
+    // Store as boolean for easier grading
+    if (typeof q.answer === 'string') {
+      correct = q.answer.toLowerCase() === 'true';
+    } else {
+      correct = !!q.answer;
+    }
+  } else {
+    // short_answer
+    options = null;
+    correct = q.answer ?? '';
+  }
+
+  return {
+    quiz_id: quizId,
+    text: q.question ?? '',
+    type,
+    options,
+    correct_answer: correct,
+    order_position: index,
+  };
+}
+
+const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
+  const [activeTab, setActiveTab] = useState('upload');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [quizGenerated, setQuizGenerated] = useState(false);
+  const [quizTitle, setQuizTitle] = useState('');
+  const [quizDescription, setQuizDescription] = useState('');
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const handleContinueToCustomize = () => {
+    if (!selectedFile) {
+      toast.error("Please select a file to upload");
+      return;
+    }
+
+    if (!quizTitle) {
+      toast.error("Please enter a quiz title");
+      return;
+    }
+
+    setActiveTab('customize');
+  };
+
+  const handleQuizReady = (quizData: any) => {
+    setQuizQuestions(quizData.questions || quizData);
+    setQuizGenerated(true);
+    setActiveTab('preview');
+  };
+
+  const handleBackToCustomize = () => {
+    setActiveTab('customize');
+  };
+
+  const handlePublishQuiz = async () => {
+    if (!user) {
+      toast.error('You must be logged in to publish a quiz');
+      return;
+    }
+    if (!quizTitle.trim()) {
+      toast.error('Quiz title is required');
+      return;
+    }
+    if (quizQuestions.length === 0) {
+      toast.error('Please add at least one question before publishing');
+      return;
+    }
+
+    setIsPublishing(true);
+    try {
+      // 1) Insert quiz
+      const invitation_code = makeCode();
+      const { data: quizInsert, error: quizErr } = await supabase
+        .from('quizzes')
+        .insert({
+          user_id: user.id,
+          title: quizTitle,
+          description: quizDescription || null,
+          invitation_code,
+          published: true,
+        })
+        .select('id, title, description, invitation_code, published, created_at')
+        .single();
+
+      if (quizErr || !quizInsert?.id) {
+        console.error('Quiz insert error:', quizErr);
+        toast.error('Publishing failed while saving the quiz.');
+        setIsPublishing(false);
+        return;
+      }
+
+      // 2) Insert questions (bulk)
+      const rows = quizQuestions.map((q, i) => mapQuestionToDBRow(q as any, quizInsert.id, i));
+      const { error: questionsErr } = await supabase.from('quiz_questions').insert(rows);
+
+      if (questionsErr) {
+        console.error('Questions insert error:', questionsErr);
+        // Helpful hint if RLS/policy is the issue
+        toast.error('Quiz saved, but questions failed to save. Check Row Level Security policies.');
+        setIsPublishing(false);
+        return;
+      }
+
+      toast.success(`Quiz published! Code: ${quizInsert.invitation_code}`);
+      // Optional callback
+      if (onPublish) onPublish(quizInsert);
+      navigate('/dashboard'); // or '/dashboard?role=professor' if you prefer
+
+      // You can route or reset state here if you want:
+      // setActiveTab('upload'); setSelectedFile(null); setQuizGenerated(false); ...
+
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Publishing failed, please try again. ${e?.message || ''}`);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleQuestionsUpdated = (questions: QuizQuestion[]) => {
+    setQuizQuestions(questions);
+  };
+
+  return (
+    <div className="flex flex-col space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">Quiz Generator</h1>
+          <p className="text-muted-foreground mt-1">Create AI-powered quizzes from your teaching materials</p>
+        </div>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-3 mb-8">
+          <TabsTrigger value="upload">Upload Content</TabsTrigger>
+          <TabsTrigger value="customize" disabled={!selectedFile}>
+            Customize Quiz
+          </TabsTrigger>
+          <TabsTrigger value="preview" disabled={!quizGenerated}>
+            Preview & Save
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="upload">
+          <TabUploadContent 
+            selectedFile={selectedFile}
+            setSelectedFile={setSelectedFile}
+            quizTitle={quizTitle}
+            setQuizTitle={setQuizTitle}
+            quizDescription={quizDescription}
+            setQuizDescription={setQuizDescription}
+            onContinue={handleContinueToCustomize}
+          />
+        </TabsContent>
+
+        <TabsContent value="customize">
+          <TabCustomizeContent 
+            file={selectedFile}
+            onQuizReady={handleQuizReady}
+          />
+        </TabsContent>
+
+        <TabsContent value="preview">
+          <TabPreviewContent 
+            quizTitle={quizTitle}
+            onBack={handleBackToCustomize}
+            onPublish={handlePublishQuiz}
+            isPublishing={isPublishing}
+            onQuestionsUpdated={handleQuestionsUpdated}
+            initialQuestions={quizQuestions}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+};
+
+export default QuizGenerator;
