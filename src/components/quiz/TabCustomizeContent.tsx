@@ -23,24 +23,10 @@ const TabCustomizeContent = ({
   const [saCount, setSaCount] = useState(5);
   const [isGenerating, setIsGenerating] = useState(false);
   // Additional quiz feature settings
-  // Time limit toggle; persists in localStorage under `quiz_time_limit_enabled`.
-  const [timeLimitEnabled, setTimeLimitEnabled] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('quiz_time_limit_enabled') === 'true';
-    }
-    return false;
-  });
-  // Time limit duration in minutes; persists under `quiz_time_limit_minutes`.
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('quiz_time_limit_minutes');
-      if (stored) {
-        const parsed = parseInt(stored, 10);
-        return isNaN(parsed) ? 10 : parsed;
-      }
-    }
-    return 10;
-  });
+  // Time limit toggle and minutes field for quiz duration
+  const [timeLimitEnabled, setTimeLimitEnabled] = useState(false);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState<number>(0);
+  // Persisted randomize questions setting
   const [randomizeQuestions, setRandomizeQuestions] = useState(() => {
     // default to true; read previous value from localStorage if present
     if (typeof window !== 'undefined') {
@@ -49,7 +35,7 @@ const TabCustomizeContent = ({
     }
     return true;
   });
-  // Adaptive learning removed per requirements.
+  // Remove adaptive learning toggle (deprecated)
   const [issueCertificate, setIssueCertificate] = useState(false);
 
   // Persist randomization preference in localStorage whenever it changes
@@ -59,24 +45,17 @@ const TabCustomizeContent = ({
     }
   }, [randomizeQuestions]);
 
-  // Persist time limit enabled flag
+  // Persist quiz duration in seconds whenever time limit or minutes changes
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('quiz_time_limit_enabled', timeLimitEnabled ? 'true' : 'false');
-    }
-  }, [timeLimitEnabled]);
-
-  // Persist time limit minutes
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      // Save the minutes only if the timer is enabled; otherwise remove
-      if (timeLimitEnabled) {
-        localStorage.setItem('quiz_time_limit_minutes', timeLimitMinutes.toString());
+      if (timeLimitEnabled && timeLimitMinutes > 0) {
+        const seconds = timeLimitMinutes * 60;
+        localStorage.setItem('quiz_duration_seconds', seconds.toString());
       } else {
-        localStorage.removeItem('quiz_time_limit_minutes');
+        localStorage.removeItem('quiz_duration_seconds');
       }
     }
-  }, [timeLimitMinutes, timeLimitEnabled]);
+  }, [timeLimitEnabled, timeLimitMinutes]);
 
   const handleGenerateQuiz = async () => {
     if (!file) {
@@ -142,7 +121,7 @@ const TabCustomizeContent = ({
                       value={mcqCount}
                       onChange={(e) => setMcqCount(parseInt(e.target.value))}
                       min={0}
-                      className="mt-1"
+                      className="ui-input mt-1"
                     />
                   </div>
 
@@ -154,7 +133,7 @@ const TabCustomizeContent = ({
                       value={tfCount}
                       onChange={(e) => setTfCount(parseInt(e.target.value))}
                       min={0}
-                      className="mt-1"
+                      className="ui-input mt-1"
                     />
                   </div>
 
@@ -166,7 +145,7 @@ const TabCustomizeContent = ({
                       value={saCount}
                       onChange={(e) => setSaCount(parseInt(e.target.value))}
                       min={0}
-                      className="mt-1"
+                      className="ui-input mt-1"
                     />
                   </div>
                 </div>
@@ -175,14 +154,14 @@ const TabCustomizeContent = ({
                   <div>
                     <Label>Quiz Features</Label>
                     <div className="space-y-3 mt-2">
-                      {/* Timer toggle */}
-                      <div className="flex items-center justify-between">
+                      {/* Time Limit Toggle */}
+                      <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
                           <Label htmlFor="time-limit" className="text-sm cursor-pointer">
                             Add Timer
                           </Label>
                           <p className="text-muted-foreground text-xs">
-                            Set a time limit for completing the quiz
+                            Specify a time limit for completing the quiz
                           </p>
                         </div>
                         <Switch
@@ -191,25 +170,25 @@ const TabCustomizeContent = ({
                           onCheckedChange={(val: boolean) => setTimeLimitEnabled(val)}
                         />
                       </div>
-                      {/* Duration field shown only when timer is enabled */}
                       {timeLimitEnabled && (
-                        <div className="flex items-center justify-between mt-3">
-                          <Label htmlFor="time-limit-minutes" className="text-sm cursor-pointer">
+                        <div className="mt-3">
+                          <Label htmlFor="time-minutes" className="text-sm">
                             Duration (minutes)
                           </Label>
                           <Input
-                            id="time-limit-minutes"
+                            id="time-minutes"
                             type="number"
-                            value={timeLimitMinutes}
                             min={1}
-                            onChange={(e) => setTimeLimitMinutes(Math.max(1, parseInt(e.target.value)))}
-                            className="w-24"
+                            value={timeLimitMinutes}
+                            onChange={(e) => setTimeLimitMinutes(parseInt(e.target.value) || 0)}
+                            className="ui-input mt-1"
+                            placeholder="Enter minutes"
                           />
                         </div>
                       )}
                       <Separator />
-                      {/* Randomize questions */}
-                      <div className="flex items-center justify-between">
+                      {/* Randomize Questions Toggle */}
+                      <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
                           <Label htmlFor="randomize" className="text-sm cursor-pointer">
                             Randomize Questions
@@ -225,8 +204,8 @@ const TabCustomizeContent = ({
                         />
                       </div>
                       <Separator />
-                      {/* Issue certificate */}
-                      <div className="flex items-center justify-between">
+                      {/* Issue Certificate Toggle */}
+                      <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
                           <Label htmlFor="certificate" className="text-sm cursor-pointer">
                             Issue Certificate

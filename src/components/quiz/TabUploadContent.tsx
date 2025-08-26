@@ -134,7 +134,8 @@ const TabUploadContent = ({
                 <Input
                   id="quizTitle"
                   placeholder="Enter quiz title"
-                  className="mt-1"
+                  /* Use our high‑contrast input styling */
+                  className="ui-input mt-1"
                   value={quizTitle}
                   onChange={(e) => setQuizTitle(e.target.value)}
                   required
@@ -146,7 +147,7 @@ const TabUploadContent = ({
                 <Input
                   id="quizDescription"
                   placeholder="Enter quiz description"
-                  className="mt-1"
+                  className="ui-input mt-1"
                   value={quizDescription}
                   onChange={(e) => setQuizDescription(e.target.value)}
                 />
@@ -155,8 +156,11 @@ const TabUploadContent = ({
               <div className="mt-4">
                 <label
                   htmlFor="file-upload"
-                  className={`block w-full cursor-pointer border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-                    selectedFile ? 'border-primary/50 bg-primary/5' : 'border-muted-foreground/25 hover:border-muted-foreground/50'
+                  /* Use ui-card-hover and ui-clickable for a clearer dropzone */
+                  className={`ui-card-hover ui-clickable block w-full cursor-pointer border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                    selectedFile
+                      ? 'border-[hsl(var(--ring))] bg-[hsl(var(--ring))]/5'
+                      : 'bg-[hsl(var(--secondary))] border-[hsl(var(--border))] hover:border-[hsl(var(--ring))]'
                   }`}
                   onDrop={handleDrop}
                   onDragOver={handleDragOver}

@@ -57,7 +57,7 @@ const QuizEdit = () => {
           return uiQuestion;
         });
         setQuestions(uiQuestions);
-        // Set the quiz duration if available
+        // Save duration if available
         setQuizDurationSeconds(quizData.quiz_duration_seconds ?? null);
       } catch (error) {
         console.error('Error fetching quiz:', error);
@@ -112,7 +112,6 @@ const QuizEdit = () => {
           title: quiz.title,
           description: quiz.description || '',
           published: quiz.published,
-          // Persist the quiz duration seconds (0 or null if not set)
           quiz_duration_seconds: quizDurationSeconds ?? undefined,
         },
         dbQuestions
@@ -184,9 +183,9 @@ const QuizEdit = () => {
                 isPublishing={saving}
                 onQuestionsUpdated={handleQuestionsUpdated}
                 initialQuestions={questions}
-                // Provide initial duration and callback for timer
+                // Provide initial duration and update callback for timer
                 initialDurationSeconds={quizDurationSeconds !== null ? quizDurationSeconds : undefined}
-                onDurationUpdated={(sec: number) => setQuizDurationSeconds(sec)}
+                onDurationUpdated={(sec: number) => setQuizDurationSeconds(sec || null)}
                 hideHeaderActions
               />
             </div>

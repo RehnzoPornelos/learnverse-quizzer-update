@@ -19,93 +19,71 @@ export interface Quiz {
   questions?: QuizQuestion[];
   created_at?: string;
   user_id?: string;
-  /**
-   * Duration of the quiz in seconds. Optional. When provided, this sets
-   * a time limit for completing the quiz. It maps to the
-   * `quiz_duration_seconds` column in the database.
-   */
+  // Duration of the quiz in seconds; optional
   quiz_duration_seconds?: number;
 }
 
 // Get a list of quizzes for the current user
 export const getUserQuizzes = async () => {
-  const { data: quizzes, error } = await supabase
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
     .from('quizzes')
     .select('*')
+    .eq('user_id', auth.user.id)   // fetch only my quizzes
+    .eq('published', true)         // show only published (i.e., not soft-deleted)
     .order('created_at', { ascending: false });
-    
-  if (error) {
-    console.error("Error fetching quizzes:", error);
-    throw error;
-  }
-  
-  return quizzes;
+
+  if (error) throw error;
+  return data ?? [];
 };
 
+
 // Get a specific quiz with its questions
-export const getQuizWithQuestions = async (
-  quizId: string
-): Promise<(Quiz & { questions: QuizQuestion[] })> => {
-  // Fetch the quiz (select columns explicitly incl. quiz_duration_seconds)
+export const getQuizWithQuestions = async (quizId: string) => {
+  // Fetch the quiz
   const { data: quiz, error: quizError } = await supabase
     .from('quizzes')
-    .select('id,title,description,published,created_at,user_id,quiz_duration_seconds')
+    .select('*')
     .eq('id', quizId)
     .single();
-
+    
   if (quizError) {
     console.error("Error fetching quiz:", quizError);
     throw quizError;
   }
-
+  
+  // Fetch the questions for this quiz
   const { data: questions, error: questionsError } = await supabase
     .from('quiz_questions')
     .select('*')
     .eq('quiz_id', quizId)
     .order('order_position', { ascending: true });
-
+    
   if (questionsError) {
     console.error("Error fetching questions:", questionsError);
     throw questionsError;
   }
-
-  // Cast to your app’s Quiz/QuizQuestion shapes
-  return { ...(quiz as unknown as Quiz), questions: questions as unknown as QuizQuestion[] };
+  
+  return { ...quiz, questions };
 };
 
 // Delete a quiz and its associated questions
 export const deleteQuiz = async (quizId: string) => {
-  try {
-    console.log('Deleting quiz:', quizId);
-    
-    // First delete all questions associated with this quiz
-    const { error: questionsError } = await supabase
-      .from('quiz_questions')
-      .delete()
-      .eq('quiz_id', quizId);
-      
-    if (questionsError) {
-      console.error("Error deleting quiz questions:", questionsError);
-      throw questionsError;
-    }
-    
-    // Then delete the quiz itself
-    const { error: quizError } = await supabase
-      .from('quizzes')
-      .delete()
-      .eq('id', quizId);
-      
-    if (quizError) {
-      console.error("Error deleting quiz:", quizError);
-      throw quizError;
-    }
-    
-    console.log('Quiz deleted successfully');
-    return true;
-  } catch (error) {
-    console.error('Error in deleteQuiz:', error);
-    throw error;
-  }
+  if (!quizId) throw new Error('Missing quiz id');
+
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) throw new Error('Not authenticated');
+
+  const { error } = await supabase
+    .from('quizzes')
+    .update({ published: false })  // soft-delete
+    .eq('id', quizId)
+    .eq('user_id', auth.user.id);  // RLS-friendly: only my row
+
+  if (error) throw error;
+  return true;
 };
 
 // Enhanced file processing for better text extraction
@@ -369,7 +347,6 @@ export const saveQuiz = async (quiz: Quiz, questions: QuizQuestion[]) => {
     const invitationCode = quiz.published ? generateInvitationCode() : null;
     
     // Insert/update the quiz
-    // quizService.ts (inside saveQuiz)
     const { data: savedQuiz, error: quizError } = await supabase
       .from('quizzes')
       .upsert({
@@ -379,7 +356,8 @@ export const saveQuiz = async (quiz: Quiz, questions: QuizQuestion[]) => {
         published: quiz.published,
         invitation_code: invitationCode,
         user_id: user.id,
-        quiz_duration_seconds: quiz.quiz_duration_seconds ?? null,   // ← add this
+        // persist quiz duration seconds when provided
+        quiz_duration_seconds: quiz.quiz_duration_seconds ?? null,
       })
       .select()
       .single();

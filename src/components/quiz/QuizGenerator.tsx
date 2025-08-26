@@ -65,6 +65,18 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  // Duration for the quiz in seconds. Persist across steps.
+  const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('quiz_duration_seconds');
+      if (stored) {
+        const parsed = parseInt(stored);
+        return isNaN(parsed) ? null : parsed;
+      }
+    }
+    return null;
+  });
+
   const handleContinueToCustomize = () => {
     if (!selectedFile) {
       toast.error("Please select a file to upload");
@@ -115,8 +127,10 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
           description: quizDescription || null,
           invitation_code,
           published: true,
+          // persist quiz duration seconds when provided
+          quiz_duration_seconds: quizDurationSeconds ?? null,
         })
-        .select('id, title, description, invitation_code, published, created_at')
+        .select('id, title, description, invitation_code, published, created_at, quiz_duration_seconds')
         .single();
 
       if (quizErr || !quizInsert?.id) {
@@ -205,6 +219,8 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
             isPublishing={isPublishing}
             onQuestionsUpdated={handleQuestionsUpdated}
             initialQuestions={quizQuestions}
+            initialDurationSeconds={quizDurationSeconds !== null ? quizDurationSeconds : undefined}
+            onDurationUpdated={(sec: number) => setQuizDurationSeconds(sec || null)}
           />
         </TabsContent>
       </Tabs>

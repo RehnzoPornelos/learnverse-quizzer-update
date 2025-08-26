@@ -4,9 +4,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { ArrowLeft } from 'lucide-react';
 import { QuizQuestion } from '@/services/quizService';
+import { Switch } from '@/components/ui/switch';
 
 interface TabPreviewContentProps {
   quizTitle: string;
@@ -15,21 +15,11 @@ interface TabPreviewContentProps {
   isPublishing: boolean;
   onQuestionsUpdated: (questions: QuizQuestion[]) => void;
   initialQuestions?: QuizQuestion[];
-  /**
-   * Initial duration of the quiz in seconds. If provided, the timer will be
-   * enabled and set to this value on mount. If undefined, the component will
-   * read duration settings from localStorage (used during quiz creation).
-   */
+  /** Optional initial duration in seconds for quizzes with timers */
   initialDurationSeconds?: number;
-  /**
-   * Callback to notify parent when the duration (in seconds) changes. When
-   * timer is disabled, this will be invoked with 0.
-   */
-  onDurationUpdated?: (durationSeconds: number) => void;
-  /**
-   * If true, hides the internal header actions (Back & Publish buttons) to
-   * allow parent components like QuizEdit to provide their own actions.
-   */
+  /** Callback when duration is updated (seconds). Use undefined or 0 for no timer */
+  onDurationUpdated?: (seconds: number) => void;
+  /** Hide internal header buttons (Back/Publish) when embedding within QuizEdit */
   hideHeaderActions?: boolean;
 }
 
@@ -57,9 +47,9 @@ const TabPreviewContent = ({
   const [hasInitialized, setHasInitialized] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Timer state: whether the timer is enabled and its duration in minutes.
-  const [timerEnabled, setTimerEnabled] = useState(false);
-  const [durationMinutes, setDurationMinutes] = useState(10);
+  // State for timer configuration
+  const [timerEnabled, setTimerEnabled] = useState<boolean>(false);
+  const [durationMinutes, setDurationMinutes] = useState<number>(0);
 
   const updateQuestions = (updated: QuizQuestion[]) => {
     setQuestions(updated);
@@ -132,50 +122,54 @@ const TabPreviewContent = ({
     }, 100);
   };
 
-  // Normalize correct answers for MCQ questions. If the answer is specified
-  // as a letter (A-D), a number (1-4), or a case-insensitive match of the
-  // option, convert it to the actual choice string so the dropdown selects
-  // the correct option instead of "Select answer".
-  const normalizeCorrectAnswer = (question: any) => {
-    if (question.type === 'mcq' && question.answer) {
-      const choices: string[] = Array.isArray(question.choices) ? question.choices : [];
-      let ans: any = question.answer;
-      if (typeof ans === 'string') {
-        const trimmed = ans.trim();
-        // Check for alphabetical letter (A, B, C, ...)
-        const letterIndex = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(trimmed.toUpperCase());
-        if (letterIndex >= 0 && letterIndex < choices.length) {
-          ans = choices[letterIndex];
-        } else {
-          // Check for numeric string (1, 2, ...)
-          const numIndex = parseInt(trimmed, 10);
-          if (!isNaN(numIndex) && numIndex >= 1 && numIndex <= choices.length) {
-            ans = choices[numIndex - 1];
-          } else {
-            // Check for case-insensitive match to one of the choices
-            const match = choices.find((c) => c.trim().toLowerCase() === trimmed.toLowerCase());
-            if (match) ans = match;
-          }
-        }
-      } else if (typeof ans === 'number') {
-        const idx = ans;
-        if (idx >= 0 && idx < choices.length) {
-          ans = choices[idx];
-        }
-      }
-      return { ...question, answer: ans };
-    }
-    return question;
-  };
-
   useEffect(() => {
     if (!hasInitialized && initialQuestions.length > 0) {
       const normalized = initialQuestions.map((q: any, index) => {
         const id = q.id || `question-${Date.now()}-${index}`;
         const type = q.type === 'essay' ? 'short_answer' : q.type;
-        // Normalize correct answer for MCQ questions to ensure proper dropdown selection
-        const normalizedQuestion = normalizeCorrectAnswer({ ...q, id, type, order_position: index });
-        return normalizedQuestion;
+        const base: any = {
+          ...q,
+          id,
+          type,
+          order_position: index,
+        };
+        // Normalize MCQ answers: if answer is letter (A-D), number (1-4), or matches a choice case-insensitively
+        if (type === 'mcq' && base.answer) {
+          const choices: string[] = Array.isArray(base.choices) ? base.choices : [];
+          const ansRaw = String(base.answer).trim();
+          let normalizedAns = '';
+          // If numeric (1-4) convert to index (0-3)
+          const numericIndex = parseInt(ansRaw);
+          if (!isNaN(numericIndex)) {
+            const idx = numericIndex - 1;
+            if (idx >= 0 && idx < choices.length) {
+              normalizedAns = choices[idx];
+            }
+          }
+          if (!normalizedAns) {
+            // If letter A-D
+            const letterIndex = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(ansRaw.toUpperCase());
+            if (letterIndex >= 0 && letterIndex < choices.length) {
+              normalizedAns = choices[letterIndex];
+            }
+          }
+          if (!normalizedAns) {
+            // Try match ignoring case
+            const found = choices.find((c) => c.trim().toLowerCase() === ansRaw.toLowerCase());
+            if (found) {
+              normalizedAns = found;
+            }
+          }
+          // Fallback to original string
+          base.answer = normalizedAns || ansRaw;
+        }
+        // Normalize true/false answers to strings
+        if (type === 'true_false' && base.answer !== undefined) {
+          if (typeof base.answer === 'boolean') {
+            base.answer = base.answer ? 'True' : 'False';
+          }
+        }
+        return base;
       });
       const randomize = localStorage.getItem('randomize_questions') === 'true';
       const ordered = randomize ? shuffleArray(normalized) : normalized;
@@ -185,63 +179,60 @@ const TabPreviewContent = ({
     }
   }, [initialQuestions, hasInitialized, onQuestionsUpdated]);
 
+  // Initialize timer state from initialDurationSeconds or localStorage
+  useEffect(() => {
+    // Determine initial timer state: use provided prop first, then localStorage
+    let seconds: number | undefined = undefined;
+    if (initialDurationSeconds !== undefined && initialDurationSeconds !== null) {
+      seconds = initialDurationSeconds;
+    } else {
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem('quiz_duration_seconds');
+        if (stored) {
+          const parsed = parseInt(stored);
+          if (!isNaN(parsed)) seconds = parsed;
+        }
+      }
+    }
+    if (seconds !== undefined && seconds > 0) {
+      setTimerEnabled(true);
+      setDurationMinutes(Math.ceil(seconds / 60));
+    }
+  }, [initialDurationSeconds]);
+
+  // Persist timer state changes to localStorage and notify parent via callback
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (timerEnabled && durationMinutes > 0) {
+        const seconds = durationMinutes * 60;
+        localStorage.setItem('quiz_duration_seconds', seconds.toString());
+        if (onDurationUpdated) {
+          onDurationUpdated(seconds);
+        }
+      } else {
+        localStorage.removeItem('quiz_duration_seconds');
+        if (onDurationUpdated) {
+          onDurationUpdated(0);
+        }
+      }
+    }
+  }, [timerEnabled, durationMinutes, onDurationUpdated]);
+
   useEffect(() => {
     if (hasInitialized) {
       onQuestionsUpdated(questions);
     }
   }, [questions]);
 
-  // Initialize timer settings based on props or localStorage when creating a new quiz.
-  useEffect(() => {
-    // If initialDurationSeconds is provided (editing existing quiz), use that value
-    if (initialDurationSeconds !== undefined) {
-      if (initialDurationSeconds > 0) {
-        setTimerEnabled(true);
-        // Round up seconds to minutes for display
-        setDurationMinutes(Math.ceil(initialDurationSeconds / 60));
-      } else {
-        setTimerEnabled(false);
-      }
-      return;
-    }
-    // Otherwise, read from localStorage for new quiz creation
-    if (typeof window !== 'undefined') {
-      const enabled = localStorage.getItem('quiz_time_limit_enabled') === 'true';
-      setTimerEnabled(enabled);
-      if (enabled) {
-        const minutesStr = localStorage.getItem('quiz_time_limit_minutes');
-        const minutes = minutesStr ? parseInt(minutesStr, 10) : 10;
-        setDurationMinutes(isNaN(minutes) ? 10 : minutes);
-      }
-    }
-  }, [initialDurationSeconds]);
-
-  // Persist timer settings and notify parent when they change
-  useEffect(() => {
-    if (!timerEnabled) {
-      // Timer disabled
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('quiz_time_limit_enabled', 'false');
-        localStorage.removeItem('quiz_time_limit_minutes');
-      }
-      if (onDurationUpdated) onDurationUpdated(0);
-    } else {
-      // Timer enabled
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('quiz_time_limit_enabled', 'true');
-        localStorage.setItem('quiz_time_limit_minutes', durationMinutes.toString());
-      }
-      if (onDurationUpdated) onDurationUpdated(durationMinutes * 60);
-    }
-  }, [timerEnabled, durationMinutes]);
-
   return (
     <div className="space-y-6">
+      {/* Header with quiz title and actions */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">{quizTitle}</h2>
           <p className="text-muted-foreground mt-1">Review and edit your quiz</p>
         </div>
+        {/* Render internal buttons only when not hidden */}
         {!hideHeaderActions && (
           <div className="flex gap-2">
             <Button variant="outline" onClick={onBack}>
@@ -256,15 +247,15 @@ const TabPreviewContent = ({
 
       <Separator />
 
-      {/* Timer controls */}
+      {/* Timer settings */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between">
           <div className="space-y-0.5">
             <Label htmlFor="quiz-timer" className="text-sm cursor-pointer">
-              Quiz Timer
+              Add Timer
             </Label>
             <p className="text-muted-foreground text-xs">
-              Enable a time limit for this quiz
+              Set a time limit for completing the quiz
             </p>
           </div>
           <Switch
@@ -274,18 +265,17 @@ const TabPreviewContent = ({
           />
         </div>
         {timerEnabled && (
-          <div className="flex items-center justify-between">
-            <Label htmlFor="quiz-duration" className="text-sm cursor-pointer">
-              Duration (minutes)
-            </Label>
+          <div className="flex items-center gap-2">
+            {/* Use our high‑contrast input styling for the timer field */}
             <Input
-              id="quiz-duration"
               type="number"
               min={1}
+              className="ui-input w-24"
               value={durationMinutes}
-              onChange={(e) => setDurationMinutes(Math.max(1, parseInt(e.target.value)))}
-              className="w-24"
+              onChange={(e) => setDurationMinutes(parseInt(e.target.value) || 0)}
+              placeholder="Minutes"
             />
+            <span className="text-sm text-muted-foreground">minutes</span>
           </div>
         )}
       </div>
@@ -306,7 +296,8 @@ const TabPreviewContent = ({
                 <div>
                   <Label className="text-sm">Type</Label>
                   <select
-                    className="mt-1 block w-full border rounded-md p-2 text-sm bg-white text-black dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700"
+                    /* Use ui-select for improved styling */
+                    className="ui-select mt-1 text-sm"
                     value={q.type as any}
                     onChange={(e) => handleTypeChange(index, e.target.value)}
                   >
@@ -318,7 +309,8 @@ const TabPreviewContent = ({
                 <div>
                   <Label className="text-sm">Question</Label>
                   <Input
-                    className="mt-1"
+                    /* Apply ui-input for question text */
+                    className="ui-input mt-1"
                     value={(q as any).question ?? ''}
                     onChange={(e) => handleQuestionFieldChange(index, 'question', e.target.value)}
                     placeholder="Enter question text"
@@ -334,14 +326,15 @@ const TabPreviewContent = ({
                           value={choice}
                           onChange={(e) => handleChoiceChange(index, cIndex, e.target.value)}
                           placeholder={`Choice ${String.fromCharCode(65 + cIndex)}`}
-                          className="mt-0"
+                          className="ui-input"
                         />
                       ))}
                     </div>
                     <div className="mt-2">
                       <Label className="text-sm">Correct Answer</Label>
                       <select
-                        className="mt-1 block w-full border rounded-md p-2 text-sm bg-white text-black dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700"
+                        /* Use ui-select for the correct answer selector */
+                        className="ui-select mt-1 text-sm"
                         value={(q as any).answer ?? ''}
                         onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
                       >
@@ -359,7 +352,8 @@ const TabPreviewContent = ({
                   <div className="mt-2">
                     <Label className="text-sm">Answer</Label>
                     <select
-                      className="mt-1 block w-full border rounded-md p-2 text-sm bg-white text-black dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700"
+                      /* Use ui-select for true/false answer */
+                      className="ui-select mt-1 text-sm"
                       value={(q as any).answer ?? ''}
                       onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
                     >
@@ -372,7 +366,8 @@ const TabPreviewContent = ({
                   <div className="mt-2">
                     <Label className="text-sm">Answer</Label>
                     <Input
-                      className="mt-1 bg-white text-black dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700 dark:placeholder-gray-400"
+                      /* Apply ui-input for short answer field */
+                      className="ui-input mt-1"
                       value={(q as any).answer ?? ''}
                       onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
                       placeholder="Enter answer"

@@ -59,7 +59,7 @@ Learning Material:
 \"\"\"
 """
 
-def truncate_text(text: str, max_chars: int = 12000) -> str:
+def truncate_text(text: str, max_chars: int = 20000) -> str:
     """
     Truncate text to fit within token limits (approx. 4 chars per token).
     """
@@ -74,17 +74,29 @@ def call_groq(prompt: str) -> str:
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
-        "max_tokens": 2048
+        # Increase max_tokens to allow more question content
+        "max_tokens": 4096
     }
     response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
 def extract_json_array(text: str):
-    match = re.search(r"\[\s*\{.*?\}\s*\]", text, re.DOTALL)
-    if not match:
+    """
+    Extract a JSON array from the model output. This function searches for the
+    first '[' and last ']' in the text and attempts to parse the substring as
+    JSON. This is more robust than the previous implementation, which only
+    captured the first object due to a non-greedy regex.
+    """
+    start = text.find('[')
+    end = text.rfind(']')
+    if start == -1 or end == -1 or end <= start:
         raise ValueError("No valid JSON array found in output.")
-    return json.loads(match.group())
+    json_str = text[start:end + 1]
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON array: {e}")
 
 @app.post("/generate-quiz/")
 async def generate_quiz(

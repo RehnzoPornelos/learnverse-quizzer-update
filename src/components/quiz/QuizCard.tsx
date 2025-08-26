@@ -40,7 +40,8 @@ const QuizCard = ({ quiz, role = 'student' }: QuizCardProps) => {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
-      <Card className="overflow-hidden transition-all duration-300 hover:shadow-md">
+      {/* Use ui-card-hover for improved borders and hover shading */}
+      <Card className="ui-card-hover overflow-hidden transition-all">
         {quiz.completed && (
           <div className="absolute top-0 right-0 m-4">
             <div className="flex items-center rounded-full bg-green-100 dark:bg-green-900 px-2 py-1">
@@ -93,7 +94,7 @@ const QuizCard = ({ quiz, role = 'student' }: QuizCardProps) => {
         
         <CardFooter className="pt-0">
           {role === 'student' ? (
-            <Button className="w-full" variant={quiz.completed ? 'outline' : 'default'}>
+            <Button className="w-full">
               {quiz.completed ? 'Review Quiz' : 'Start Quiz'}
             </Button>
           ) : (

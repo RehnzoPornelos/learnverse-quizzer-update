@@ -32,7 +32,8 @@ const ProfessorDashboard = () => {
     const fetchQuizzes = async () => {
       try {
         const fetchedQuizzes = await getUserQuizzes();
-        setQuizzes(fetchedQuizzes);
+        // Only include quizzes that are published. Unpublished quizzes (soft deleted) are hidden from dashboard.
+        setQuizzes(fetchedQuizzes.filter(q => q.published));
       } catch (error) {
         console.error('Error fetching quizzes:', error);
         toast.error('Failed to load quizzes');
@@ -61,12 +62,16 @@ const ProfessorDashboard = () => {
 
   const handleDeleteQuiz = async (quizId: string, quizTitle: string) => {
     try {
+      // Ensure a valid quiz id before attempting deletion
+      if (!quizId) {
+        toast.error('Invalid quiz identifier.');
+        return;
+      }
       setDeletingQuizId(quizId);
+      // Mark the quiz as unpublished
       await deleteQuiz(quizId);
-      
-      // Remove the deleted quiz from the local state
+      // Remove the quiz from the visible list
       setQuizzes(prevQuizzes => prevQuizzes.filter(q => q.id !== quizId));
-      
       toast.success(`Quiz "${quizTitle}" deleted successfully`);
     } catch (error) {
       console.error('Error deleting quiz:', error);
