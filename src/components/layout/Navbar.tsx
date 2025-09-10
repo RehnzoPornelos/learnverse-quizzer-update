@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -39,7 +38,7 @@ const Navbar = () => {
     <nav
       className={cn(
         'fixed w-full z-50 transition-all duration-300',
-        isScrolled ? 'py-3 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md shadow-sm' : 'py-5'
+        isScrolled ? 'py-3 bg-background/80 backdrop-blur-md shadow-sm' : 'py-5'
       )}
     >
       <div className="container-content">
@@ -105,7 +104,7 @@ const Navbar = () => {
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.3 }}
-            className="md:hidden bg-white dark:bg-gray-900 shadow-lg border-t"
+            className="md:hidden bg-background shadow-lg border-t border-border"
           >
             <div className="container py-4 space-y-4">
               <div className="flex flex-col space-y-3">
@@ -130,7 +129,7 @@ const Navbar = () => {
                   Join a Quiz
                 </Link>
               </div>
-              <div className="flex flex-col space-y-2 pt-2 border-t">
+              <div className="flex flex-col space-y-2 pt-2 border-t border-border">
                 {!loading && (
                   user ? (
                     <Link to="/account-settings" className="w-full">

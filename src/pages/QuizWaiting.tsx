@@ -1,11 +1,12 @@
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { supabase } from '@/integrations/supabase/client';
+import { getSocket } from '@/lib/socket';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Users, Play, Clock, XCircle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -25,33 +26,98 @@ const QuizWaiting = () => {
   const [showConfirmCancel, setShowConfirmCancel] = useState(false);
   const [isStudent, setIsStudent] = useState(false);
   const [studentName, setStudentName] = useState('');
-  const [quizStatus, setQuizStatus] = useState('waiting');
+  const [quizStatus, setQuizStatus] = useState<'waiting' | 'started' | 'ended'>('waiting');
+  // Keep a ref to the socket so we can access it inside callbacks
+  const socketRef = useRef<any>(null);
   
   useEffect(() => {
-    // Handle student joining from the join page
-    if (location.state?.isStudent) {
-      setIsStudent(true);
-      setStudentName(location.state.username);
-      setQuizTitle(location.state.quizTitle || '');
-      setQuizCode(location.state.joinCode || '');
-      
-      // Add to participants (in a real app, this would be done via a database)
-      // For demo purposes, we're using localStorage to simulate this
-      const participantKey = `quiz_${id}_participants`;
-      const existingParticipants = JSON.parse(localStorage.getItem(participantKey) || '[]');
-      if (!existingParticipants.includes(location.state.username)) {
-        const updatedParticipants = [...existingParticipants, location.state.username];
-        localStorage.setItem(participantKey, JSON.stringify(updatedParticipants));
-      }
-    } else {
-      // Professor is accessing the waiting room
+    // Reset participants list
+    setParticipants([]);
+    // Determine role and initial data from location.state
+    const isStudentFlag = Boolean(location.state?.isStudent);
+    setIsStudent(isStudentFlag);
+    setStudentName(location.state?.username || '');
+    // quizTitle and quizCode may come from location.state or need to be fetched
+    if (location.state?.quizTitle) {
+      setQuizTitle(location.state.quizTitle);
+    }
+    if (location.state?.joinCode) {
+      setQuizCode(location.state.joinCode);
+    }
+
+    // If professor (not student), fetch quiz details from DB
+    if (!isStudentFlag) {
       fetchQuizDetails();
     }
-    
-    // Set up a timer to fetch participants
-    const interval = setInterval(fetchParticipants, 3000);
-    
-    return () => clearInterval(interval);
+
+    // Setup Socket.IO connection and event handlers
+    const socket = getSocket();
+    socketRef.current = socket;
+    // Determine room code: use state joinCode or current quizCode
+    const roomCode = location.state?.joinCode || quizCode;
+    // Emit appropriate join event
+    if (isStudentFlag) {
+      // Student joins room
+      socket.emit('student_join', {
+        room: roomCode,
+        student_id: user?.id ?? null,
+        name: location.state?.username || 'Student',
+      });
+    } else if (location.state?.joinCode) {
+      // Host provided a join code explicitly (e.g. via navigation state)
+      socket.emit('host_open_quiz', {
+        room: roomCode,
+        quiz_id: id,
+        title: location.state?.quizTitle || quizTitle,
+      });
+    }
+
+    // Handle participant updates
+    socket.on('server:student-joined', (payload: any) => {
+      if (Array.isArray(payload?.participants)) {
+        setParticipants(payload.participants);
+      }
+    });
+    // Handle participant leaving
+    socket.on('server:client-left', (payload: any) => {
+      if (Array.isArray(payload?.participants)) {
+        setParticipants(payload.participants);
+      }
+    });
+    // Handle quiz started
+    socket.on('server:quiz-start', (payload: any) => {
+      setQuizStatus('started');
+      if (isStudentFlag) {
+        // Navigate student to take the quiz
+        navigate(`/quiz/take/${id}`, {
+          state: {
+            username: location.state?.username || studentName,
+            quizId: id,
+          },
+        });
+      } else {
+        // Host goes to results page
+        navigate(`/quiz/results/${id}`);
+      }
+    });
+    // Handle quiz ended/cancelled
+    socket.on('server:quiz-end', (payload: any) => {
+      setQuizStatus('ended');
+      toast.success('Quiz ended');
+      // Send everyone back to dashboard
+      navigate('/dashboard');
+    });
+
+    return () => {
+      // Clean up event listeners on unmount
+      socket.off('server:student-joined');
+      socket.off('server:client-left');
+      socket.off('server:quiz-start');
+      socket.off('server:quiz-end');
+    };
+    // We intentionally exclude quizCode and quizTitle from deps to avoid re‑joining
+    // multiple times; location.state carries the joinCode and quizTitle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, location]);
   
   const fetchQuizDetails = async () => {
@@ -67,46 +133,33 @@ const QuizWaiting = () => {
       if (quiz) {
         setQuizTitle(quiz.title);
         setQuizCode(quiz.invitation_code);
+        // After retrieving the invitation code, open the quiz room for the host.
+        // This is necessary when the host navigates directly to the waiting room without a join code in location.state.
+        try {
+          const socket = socketRef.current || getSocket();
+          socket.emit('host_open_quiz', {
+            room: quiz.invitation_code,
+            quiz_id: id,
+            title: quiz.title,
+          });
+        } catch (err) {
+          console.error('Failed to emit host_open_quiz:', err);
+        }
       }
     } catch (error) {
       console.error('Error fetching quiz details:', error);
       toast.error('Failed to load quiz details');
     }
   };
-  
-  const fetchParticipants = () => {
-    // In a real app, this would fetch from a database
-    // For demo purposes, we're using localStorage
-    const participantKey = `quiz_${id}_participants`;
-    const storedParticipants = JSON.parse(localStorage.getItem(participantKey) || '[]');
-    setParticipants(storedParticipants);
-    
-    // Check if quiz has been started by professor
-    const statusKey = `quiz_${id}_status`;
-    const status = localStorage.getItem(statusKey) || 'waiting';
-    setQuizStatus(status);
-    
-    // If the quiz has started and user is a student, navigate to the quiz
-    if (status === 'started' && isStudent) {
-      navigate(`/quiz/take/${id}`, { 
-        state: { 
-          username: studentName,
-          quizId: id
-        } 
-      });
-    }
-  };
-  
+
   const handleStartQuiz = async () => {
     setIsStarting(true);
     try {
-      // Update quiz status in localStorage (in a real app, this would be in the database)
-      localStorage.setItem(`quiz_${id}_status`, 'started');
-      
-      // In a real implementation, you would update the database here
-      
-      // Redirect to the quiz page
+      const socket = socketRef.current || getSocket();
+      // Announce start; send optional duration if you implement timers
+      socket.emit('host_start', { room: quizCode, starts_at: Date.now() });
       toast.success('Quiz started successfully!');
+      // Host navigates to results page
       navigate(`/quiz/results/${id}`);
     } catch (error) {
       console.error('Error starting quiz:', error);
@@ -116,16 +169,12 @@ const QuizWaiting = () => {
       setShowConfirmStart(false);
     }
   };
-  
+
   const handleCancelQuiz = async () => {
     setIsCancelling(true);
     try {
-      // Clear participants and status from localStorage
-      localStorage.removeItem(`quiz_${id}_participants`);
-      localStorage.removeItem(`quiz_${id}_status`);
-      
-      // In a real implementation, you would update the database here
-      
+      const socket = socketRef.current || getSocket();
+      socket.emit('host_end', { room: quizCode });
       toast.success('Quiz cancelled');
       navigate('/dashboard');
     } catch (error) {
