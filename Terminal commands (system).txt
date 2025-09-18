@@ -1,34 +1,32 @@
-cd backend
+MAIN PC COMMANDS
+(ADDRESS FOR MAIN PC - add on .env.local)
+VITE_BACKEND_URL=http://172.16.28.128:8000
 
+cd backend
 uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload
 
+(New terminal)
 npm run dev
 
-
-Things to run:
-
+(New terminal)
 npm i -D supabase
-
 npx supabase login
-
 npx supabase gen types typescript --project-id tjmtqmwhkqrbscxsegjl --schema public > src/integrations/supabase/types.ts
 
 
 
-WHAT TO INSTALL WHEN DEPLOYING
+STEP-BY-STEP DEPLOYMENT
 
 (for bypassing)
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Unrestricted
 
-(for backend)
+(check versions)
+node -v   # ideal: v22.13.1
+npm -v    # ideal: 10.9.2
+python -V # ideal: 3.12.1
+
+(packages for backend)
 pip install -r backend/requirements.txt
 
-(for frontend)
-npm ci
-
-(for PLs)
-node -v   # you: v22.13.1
-npm -v    # you: 10.9.2
-
-
-VITE_BACKEND_URL=http://172.16.28.128:8000
+(packages for frontend)
+npm ci --no-audit --no-fund
