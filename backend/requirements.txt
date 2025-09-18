@@ -1,8 +1,19 @@
-fastapi
-uvicorn
-python-dotenv
-PyMuPDF
-requests
-python-docx
-python-pptx
-python-socketio[asgi]>=5.11.0
+# ---- Core framework & ASGI server ----
+fastapi==0.115.0
+uvicorn==0.31.0
+
+# ---- Environment & HTTP ----
+python-dotenv==1.0.1
+requests==2.31.0
+
+# ---- Realtime (Socket.IO over ASGI) ----
+python-socketio[asgi]==5.13.0
+
+# ---- Supabase Python client ----
+supabase==2.18.1
+
+# ---- Document & slide extraction (used by utils.extract_text_from_file) ----
+# If you already have specific versions installed, keep them; otherwise these are safe on Python 3.12.
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+python-pptx>=0.6.23

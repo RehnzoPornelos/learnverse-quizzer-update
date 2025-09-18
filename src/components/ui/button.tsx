@@ -9,7 +9,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Add a subtle shadow to the default variant so buttons stand out
+        // against light backgrounds. This improves visibility in light mode
+        // while remaining understated in dark mode.
+        default: "bg-primary text-primary-foreground shadow-md hover:bg-primary/90",
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline:

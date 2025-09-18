@@ -9,7 +9,11 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-lg border bg-card text-card-foreground shadow-sm",
+      // Ensure cards stand out against light backgrounds by adding a more
+      // pronounced border colour and a slightly larger shadow. In dark
+      // mode we use a darker border. The `bg-card` token remains so
+      // themes can still override the background colour.
+      "rounded-lg border border-gray-200 dark:border-gray-700 bg-card text-card-foreground shadow-md",
       className
     )}
     {...props}

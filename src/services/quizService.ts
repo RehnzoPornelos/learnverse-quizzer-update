@@ -8,6 +8,8 @@ export interface QuizQuestion {
   options: any;
   order_position: number;
   correct_answer?: any;
+  // Additional extension fields can be added here; note: `user_id` is not part of the
+  // quiz_questions schema since ownership is enforced via a join with the quizzes table.
 }
 
 export interface Quiz {
@@ -73,14 +75,18 @@ export const getQuizWithQuestions = async (quizId: string) => {
 export const deleteQuiz = async (quizId: string) => {
   if (!quizId) throw new Error('Missing quiz id');
 
+  // Ensure user is authenticated
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) throw new Error('Not authenticated');
 
+  // Soft delete the quiz by setting published = false. Restrict update to the
+  // current user via user_id filter. If no matching row exists or the user
+  // doesn't own the quiz, supabase will return an error via RLS.
   const { error } = await supabase
     .from('quizzes')
-    .update({ published: false })  // soft-delete
+    .update({ published: false })
     .eq('id', quizId)
-    .eq('user_id', auth.user.id);  // RLS-friendly: only my row
+    .eq('user_id', auth.user.id);
 
   if (error) throw error;
   return true;
@@ -370,40 +376,74 @@ export const saveQuiz = async (quiz: Quiz, questions: QuizQuestion[]) => {
     console.log('Quiz saved successfully:', savedQuiz.id);
     
     if (questions && questions.length > 0) {
-      // Prepare questions with proper UUIDs
-      const questionsToSave = questions.map((question, index) => ({
-        id: question.id || uuidv4(), // Ensure proper UUID
-        quiz_id: savedQuiz.id,
-        text: question.text,
-        type: question.type,
-        options: question.options,
-        correct_answer: question.correct_answer,
-        order_position: question.order_position !== undefined ? question.order_position : index
-      }));
-      
+      // Prepare questions with proper UUIDs.  Ownership will be enforced via RLS based on quiz_id.
+      // Helper to test UUID format. We consider a simple regex match: 8-4-4-4-12 hex characters.
+      const isValidUuid = (val: string) => {
+        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val);
+      };
+
+      const questionsToSave = questions.map((question, index) => {
+        // Normalize the question type from UI to database values.  The DB accepts
+        // `multiple_choice`, `true_false`, and `essay` (for short/essay questions).
+        // Incoming UI types may be "mcq" (for multiple choice) or other strings,
+        // so convert accordingly before inserting.  Unsupported types fall back to
+        // their original value.
+        let dbType: string = question.type;
+        if (dbType === 'mcq') {
+          dbType = 'multiple_choice';
+        } else if (dbType === 'essay' || dbType === 'short') {
+          // Treat both essay and short-answer UI types as the same DB type
+          dbType = 'essay';
+        }
+
+        // Determine a valid UUID for the question.  Existing questions should have
+        // valid UUIDs; new questions created in the editor may have placeholder
+        // identifiers like "new-0".  If the provided id is not a valid UUID,
+        // generate a fresh one.  Using our own UUID here ensures that the
+        // database does not reject invalid UUIDs on insert.
+        let finalId: string;
+        if (question.id && typeof question.id === 'string' && isValidUuid(question.id)) {
+          finalId = question.id;
+        } else {
+          finalId = uuidv4();
+        }
+
+        return {
+          id: finalId,
+          quiz_id: savedQuiz.id,
+          text: question.text,
+          type: dbType,
+          options: question.options,
+          correct_answer: question.correct_answer,
+          order_position: question.order_position !== undefined ? question.order_position : index,
+        };
+      });
+
       console.log('Saving questions:', questionsToSave.length);
-      
+
       // Delete existing questions for this quiz first (in case of update)
+      // Use match on quiz_id to avoid deep generic instantiation. RLS ensures only
+      // questions belonging to this user's quiz are visible for deletion.
       const { error: deleteError } = await supabase
         .from('quiz_questions')
         .delete()
-        .eq('quiz_id', savedQuiz.id);
-        
+        .match({ quiz_id: savedQuiz.id });
+
       if (deleteError) {
-        console.error("Error deleting existing questions:", deleteError);
+        console.error('Error deleting existing questions:', deleteError);
       }
-      
+
       // Insert new questions
       const { data: savedQuestions, error: questionsError } = await supabase
         .from('quiz_questions')
         .insert(questionsToSave)
         .select();
-        
+
       if (questionsError) {
-        console.error("Error saving questions:", questionsError);
+        console.error('Error saving questions:', questionsError);
         throw questionsError;
       }
-      
+
       console.log('Questions saved successfully:', savedQuestions?.length);
       return { ...savedQuiz, questions: savedQuestions };
     }

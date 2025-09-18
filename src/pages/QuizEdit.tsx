@@ -18,6 +18,15 @@ const QuizEdit = () => {
   const [saving, setSaving] = useState(false);
   const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(null);
 
+  // Allow editing the quiz title locally
+  const handleTitleChange = (e: any) => {
+    const newTitle = e.target.value;
+    setQuiz((prev: any) => {
+      if (!prev) return prev;
+      return { ...prev, title: newTitle };
+    });
+  };
+
   useEffect(() => {
     window.scrollTo(0, 0);
     
@@ -29,18 +38,26 @@ const QuizEdit = () => {
         setQuiz(quizData);
         // Convert questions from DB format to UI format expected by TabPreviewContent
         const uiQuestions = (quizData.questions || []).map((q: any) => {
-          // id, type remain the same
+          // Normalize DB type to UI type.  The database stores types such as
+          // 'multiple_choice', 'true_false' and 'essay'.  Convert
+          // 'multiple_choice' to 'mcq' for the editor; leave other types as-is.
+          let uiType = q.type;
+          if (q.type === 'multiple_choice') {
+            uiType = 'mcq';
+          }
+          // Build the UI question object
           const uiQuestion: any = {
             id: q.id,
-            type: q.type,
+            type: uiType,
             question: q.text,
-            // For MCQ, options is an array of strings
+            // For MCQ, options/choices is an array of strings
             choices: Array.isArray(q.options) ? q.options : [],
           };
-          if (q.type === 'mcq') {
+          // Determine answer formatting based on UI type
+          if (uiType === 'mcq') {
             // store correct answer as the option text or letter if not found
             uiQuestion.answer = q.correct_answer ?? '';
-          } else if (q.type === 'true_false') {
+          } else if (uiType === 'true_false') {
             // convert boolean to string 'True'/'False'
             const ans = q.correct_answer;
             if (typeof ans === 'boolean') {
@@ -51,7 +68,7 @@ const QuizEdit = () => {
               uiQuestion.answer = '';
             }
           } else {
-            // short answer: use text or empty
+            // essay/short answer: use text or empty
             uiQuestion.answer = q.correct_answer ?? '';
           }
           return uiQuestion;
@@ -176,6 +193,18 @@ const QuizEdit = () => {
                 </div>
               </div>
               
+              {/* Field to edit the quiz name */}
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-foreground" htmlFor="quiz-name">Quiz Name</label>
+                <input
+                  id="quiz-name"
+                  type="text"
+                  value={quiz.title}
+                  onChange={handleTitleChange}
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+              </div>
+
               <TabPreviewContent
                 quizTitle={quiz.title}
                 onBack={handleBackClick}

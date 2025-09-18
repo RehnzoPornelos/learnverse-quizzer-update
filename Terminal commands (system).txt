@@ -1,0 +1,34 @@
+cd backend
+
+uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload
+
+npm run dev
+
+
+Things to run:
+
+npm i -D supabase
+
+npx supabase login
+
+npx supabase gen types typescript --project-id tjmtqmwhkqrbscxsegjl --schema public > src/integrations/supabase/types.ts
+
+
+
+WHAT TO INSTALL WHEN DEPLOYING
+
+(for bypassing)
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Unrestricted
+
+(for backend)
+pip install -r backend/requirements.txt
+
+(for frontend)
+npm ci
+
+(for PLs)
+node -v   # you: v22.13.1
+npm -v    # you: 10.9.2
+
+
+VITE_BACKEND_URL=http://172.16.28.128:8000

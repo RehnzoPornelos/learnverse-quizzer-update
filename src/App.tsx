@@ -19,6 +19,7 @@ import StudentJoin from "./pages/StudentJoin";
 import QuizWaiting from "./pages/QuizWaiting";
 import TakeQuiz from "./pages/TakeQuiz";
 import Analytics from "./pages/Analytics";
+import QuizAnalytics from "./pages/QuizAnalytics";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import { AuthProvider } from "./context/AuthContext";
@@ -55,6 +56,13 @@ const App = () => (
               <Route path="/quiz/results/:id" element={
                 <ProtectedRoute>
                   <QuizResults />
+                </ProtectedRoute>
+              } />
+
+              {/* Real-time analytics page for professors during an active quiz */}
+              <Route path="/quiz/analytics/:id" element={
+                <ProtectedRoute>
+                  <QuizAnalytics />
                 </ProtectedRoute>
               } />
               <Route path="/analytics" element={

@@ -29,6 +29,16 @@ const QuizWaiting = () => {
   const [quizStatus, setQuizStatus] = useState<'waiting' | 'started' | 'ended'>('waiting');
   // Keep a ref to the socket so we can access it inside callbacks
   const socketRef = useRef<any>(null);
+
+  /**
+   * Track whether we've already emitted the initial join/open event.  This
+   * prevents duplicate events when `quizCode` or other dependencies
+   * change, which could happen if data is loaded asynchronously from
+   * Supabase.  Separate refs are used for student join and host open to
+   * avoid conflating the two roles.
+   */
+  const hasEmittedJoinRef = useRef(false);
+  const hasEmittedOpenRef = useRef(false);
   
   useEffect(() => {
     // Reset participants list
@@ -56,20 +66,23 @@ const QuizWaiting = () => {
     // Determine room code: use state joinCode or current quizCode
     const roomCode = location.state?.joinCode || quizCode;
     // Emit appropriate join event
-    if (isStudentFlag) {
-      // Student joins room
+    if (isStudentFlag && roomCode) {
+      // Student joins room; guard against multiple emissions in case
+      // quizCode is set later.
       socket.emit('student_join', {
         room: roomCode,
         student_id: user?.id ?? null,
         name: location.state?.username || 'Student',
       });
-    } else if (location.state?.joinCode) {
+      hasEmittedJoinRef.current = true;
+    } else if (!isStudentFlag && location.state?.joinCode && roomCode) {
       // Host provided a join code explicitly (e.g. via navigation state)
       socket.emit('host_open_quiz', {
         room: roomCode,
         quiz_id: id,
         title: location.state?.quizTitle || quizTitle,
       });
+      hasEmittedOpenRef.current = true;
     }
 
     // Handle participant updates
@@ -96,8 +109,8 @@ const QuizWaiting = () => {
           },
         });
       } else {
-        // Host goes to results page
-        navigate(`/quiz/results/${id}`);
+        // Host goes to real‑time analytics page instead of results page
+        navigate(`/quiz/analytics/${id}`);
       }
     });
     // Handle quiz ended/cancelled
@@ -119,6 +132,36 @@ const QuizWaiting = () => {
     // multiple times; location.state carries the joinCode and quizTitle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, location]);
+
+  /**
+   * Because `quizCode` may be loaded asynchronously (e.g. when the student
+   * navigates without a `joinCode` in `location.state`), we perform a
+   * secondary emission once the code becomes available.  We guard with
+   * `hasEmittedJoinRef` to ensure the event is only sent once.  This
+   * effect will run whenever `quizCode` or related dependencies change.
+   */
+  useEffect(() => {
+    if (!socketRef.current) return;
+    // Student late join
+    if (isStudent && quizCode && !hasEmittedJoinRef.current) {
+      socketRef.current.emit('student_join', {
+        room: quizCode,
+        student_id: user?.id ?? null,
+        name: studentName || 'Student',
+      });
+      hasEmittedJoinRef.current = true;
+    }
+    // Host late open (host navigated without joinCode in state)
+    if (!isStudent && quizCode && !hasEmittedOpenRef.current) {
+      socketRef.current.emit('host_open_quiz', {
+        room: quizCode,
+        quiz_id: id,
+        title: quizTitle,
+      });
+      hasEmittedOpenRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizCode, quizTitle, isStudent, studentName, user?.id]);
   
   const fetchQuizDetails = async () => {
     try {
@@ -133,15 +176,18 @@ const QuizWaiting = () => {
       if (quiz) {
         setQuizTitle(quiz.title);
         setQuizCode(quiz.invitation_code);
-        // After retrieving the invitation code, open the quiz room for the host.
-        // This is necessary when the host navigates directly to the waiting room without a join code in location.state.
+        // After retrieving the invitation code, open the quiz room for the host when
+        // necessary. Guard against multiple emissions using hasEmittedOpenRef.
         try {
           const socket = socketRef.current || getSocket();
-          socket.emit('host_open_quiz', {
-            room: quiz.invitation_code,
-            quiz_id: id,
-            title: quiz.title,
-          });
+          if (!hasEmittedOpenRef.current) {
+            socket.emit('host_open_quiz', {
+              room: quiz.invitation_code,
+              quiz_id: id,
+              title: quiz.title,
+            });
+            hasEmittedOpenRef.current = true;
+          }
         } catch (err) {
           console.error('Failed to emit host_open_quiz:', err);
         }
@@ -160,7 +206,7 @@ const QuizWaiting = () => {
       socket.emit('host_start', { room: quizCode, starts_at: Date.now() });
       toast.success('Quiz started successfully!');
       // Host navigates to results page
-      navigate(`/quiz/results/${id}`);
+      navigate(`/quiz/analytics/${id}`);
     } catch (error) {
       console.error('Error starting quiz:', error);
       toast.error('Failed to start quiz');
