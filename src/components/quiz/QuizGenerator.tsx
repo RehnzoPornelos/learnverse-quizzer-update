@@ -65,6 +65,9 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  // NEW: selected class section codes (UI only for now)
+  const [selectedSections, setSelectedSections] = useState<string[]>([]);
+
   // Duration for the quiz in seconds. Persist across steps.
   const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(() => {
     if (typeof window !== 'undefined') {
@@ -200,6 +203,11 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
             setQuizTitle={setQuizTitle}
             quizDescription={quizDescription}
             setQuizDescription={setQuizDescription}
+
+            /* NEW: pass multi-select state */
+            selectedSections={selectedSections}
+            setSelectedSections={setSelectedSections}
+
             onContinue={handleContinueToCustomize}
           />
         </TabsContent>

@@ -50,11 +50,8 @@ def db_health():
     # light call just to verify creds/URL
     return supabase.table("pg_stat_activity").select("datname").limit(1).execute()
 
-# ---------- App / CORS (ultra-permissive to eliminate CORS as a cause) ----------
+# ---------- App / CORS ----------
 app = FastAPI()
-
-# IMPORTANT: when allow_credentials=False we can safely allow_origins=["*"].
-# This prevents browsers from turning server errors into "TypeError: Failed to fetch".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,7 +60,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request logging to see if calls arrive and what status returns
+# Request logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("learnverse-backend")
 
@@ -77,19 +74,17 @@ async def log_requests(request: Request, call_next):
         log.exception("ERROR %s %s: %s", request.method, request.url.path, e)
         raise
 
-# Explicit OPTIONS handler (belt-and-suspenders for some lab proxies)
+# Explicit OPTIONS handler
 @app.options("/generate-quiz")
 async def options_generate_quiz():
     return JSONResponse(status_code=204, content=None)
 
-# ---------- Socket.IO (share app as socket_app) ----------
+# ---------- Socket.IO ----------
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
-# In-memory room registry
 room_participants: Dict[str, List[Dict[str, Any]]] = {}
 
-# ---------- Socket.IO events ----------
 @sio.event
 async def student_join(sid, data):
     data = data or {}
@@ -173,33 +168,44 @@ async def disconnect(sid):
 
 # ---------- Quiz generation helpers ----------
 def generate_prompt(text: str, mcq_count: int, sa_count: int, tf_count: int) -> str:
+    """
+    Richer wording for questions/answers; avoids one-word choices and 'All of the above'.
+    """
+    total = mcq_count + sa_count + tf_count
     return f"""
-From the following learning material, generate a quiz with a total of {mcq_count + sa_count + tf_count} questions.
+From the following learning material, generate a quiz with a total of {total} questions:
 
-- {mcq_count} Multiple Choice Questions (with 4 choices and a correct answer).
+- {mcq_count} Multiple Choice Questions (exactly 4 choices and one correct).
 - {sa_count} Short Answer Questions.
 - {tf_count} True/False Questions.
 
-Keep every question and answer concise. MCQ choices must be short phrases (1 to 5 words).
-Do NOT include numbering or extra text (except a question mark at the end of every question for MCQ and Short answers). Only return the JSON array.
+WRITING REQUIREMENTS (important):
+- Make questions clear and informative, about 12–25 words (avoid telegraphic phrasing).
+- MCQ choices must be *informative statements*, each 8–16 words, mutually exclusive and plausible.
+- NEVER use generic choices like "All of the above", "None of the above", or "Both A and B".
+- The MCQ "answer" must be the full text of the correct choice (not a letter).
+- Short-answer "answer" should be 1–2 sentences (12–35 words), specific and faithful to the material.
+- True/False "answer" should be the JSON boolean true or false.
+- Everything must be grounded in the supplied material; avoid hallucinations.
 
-Respond ONLY with a JSON array in this format, without adding any explanation or preamble:
+Return ONLY a JSON array in this exact schema (no explanations, no code fences):
+
 [
   {{
     "type": "mcq",
-    "question": "...",
-    "choices": ["A", "B", "C", "D"],
-    "answer": "B"
+    "question": "…",
+    "choices": ["…", "…", "…", "…"],
+    "answer": "…"   // must exactly match one of the choices
   }},
   {{
     "type": "short_answer",
-    "question": "...",
-    "answer": "..."
+    "question": "…",
+    "answer": "…"   // 1–2 sentences
   }},
   {{
     "type": "true_false",
-    "question": "...",
-    "answer": "..."
+    "question": "…",
+    "answer": true  // or false
   }}
 ]
 
@@ -224,8 +230,9 @@ def _post_to_groq(model: str, prompt: str, max_tokens: int = GROQ_MAX_TOKENS) ->
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": max_tokens,   # adjustable on constant
+        # slightly higher temperature for richer wording, still stable
+        "temperature": 0.45,
+        "max_tokens": max_tokens,
         "stop": ["```", "<think>"],
     }
     return requests.post(GROQ_ENDPOINT, headers=headers, json=data, timeout=GROQ_TIMEOUT_S)
@@ -296,7 +303,7 @@ def extract_json_array(text: str):
 def health():
     return {"ok": True}
 
-# Support both with and without trailing slash (avoids 307 redirect + CORS issues)
+# Support both with and without trailing slash
 @app.post("/generate-quiz")
 @app.post("/generate-quiz/", include_in_schema=False)
 async def generate_quiz(

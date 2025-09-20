@@ -1,13 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
-// The progress bar component has been removed because quiz generation now happens in the customization step.
 import { Separator } from '@/components/ui/separator';
 import { BookOpen, FileText, FilePlus, Plus, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 interface TabUploadContentProps {
   selectedFile: File | null;
@@ -16,6 +16,12 @@ interface TabUploadContentProps {
   setQuizTitle: (title: string) => void;
   quizDescription: string;
   setQuizDescription: (description: string) => void;
+
+  /** selected class section codes (e.g., ["IT-32","CYB-21"]) */
+  selectedSections: string[];
+  /** setter for the selected section codes */
+  setSelectedSections: (codes: string[]) => void;
+
   onContinue: () => void;
 }
 
@@ -26,31 +32,62 @@ const TabUploadContent = ({
   setQuizTitle,
   quizDescription,
   setQuizDescription,
+  selectedSections,
+  setSelectedSections,
   onContinue,
 }: TabUploadContentProps) => {
-  // Removed uploading state; the file is simply validated here. Quiz generation is handled in the customization tab.
+  // List of available section codes from public.class_sections
+  const [availableSections, setAvailableSections] = useState<string[]>([]);
+  const [loadingSections, setLoadingSections] = useState<boolean>(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      setLoadingSections(true);
+      try {
+        // Loosened typing to avoid mismatch if types lag behind
+        const { data, error } = await (supabase as any)
+          .from('class_sections')
+          .select('code')
+          .order('code', { ascending: true });
+
+        if (!isMounted) return;
+
+        if (error) {
+          console.error('Failed to load class sections:', error);
+          toast.error('Could not load class sections. Please try again later.');
+          return;
+        }
+
+        const codes = Array.isArray(data) ? data.map((r: any) => String(r.code)) : [];
+        setAvailableSections(codes);
+      } finally {
+        setLoadingSections(false);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
-      
-      // Check file extension
+
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
         toast.error(`Invalid file type. Please upload one of the following: ${allowedExtensions.join(', ')}`);
         return;
       }
-      
-      // Check file size (20MB max)
+
       if (file.size > 20 * 1024 * 1024) {
         toast.error('File is too large. Maximum size is 20MB.');
         return;
       }
-      
+
       setSelectedFile(file);
-      
-      // If no title yet, suggest a title based on the filename
+
       if (!quizTitle) {
         const suggestedTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
         setQuizTitle(suggestedTitle);
@@ -58,46 +95,38 @@ const TabUploadContent = ({
     }
   };
 
-    /**
-     * Continue to the customization step after ensuring a file and quiz title are provided.
-     * Generation now occurs in the customization step, so this handler performs validation only.
-     */
-    const handleContinue = () => {
-      if (!selectedFile) {
-        toast.error('Please select a file first');
-        return;
-      }
-      if (!quizTitle.trim()) {
-        toast.error('Please enter a quiz title');
-        return;
-      }
-      onContinue();
-    };
-
+  const handleContinue = () => {
+    if (!selectedFile) {
+      toast.error('Please select a file first');
+      return;
+    }
+    if (!quizTitle.trim()) {
+      toast.error('Please enter a quiz title');
+      return;
+    }
+    onContinue();
+  };
 
   const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
-      
-      // Check file extension
+
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
         toast.error(`Invalid file type. Please upload one of the following: ${allowedExtensions.join(', ')}`);
         return;
       }
-      
-      // Check file size (20MB max)
+
       if (file.size > 20 * 1024 * 1024) {
         toast.error('File is too large. Maximum size is 20MB.');
         return;
       }
-      
+
       setSelectedFile(file);
-      
-      // If no title yet, suggest a title based on the filename
+
       if (!quizTitle) {
         const suggestedTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
         setQuizTitle(suggestedTitle);
@@ -108,6 +137,20 @@ const TabUploadContent = ({
   const handleDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
   };
+
+  // === NEW helpers for checkbox UI ===
+  const toggleSection = (code: string, checked: boolean) => {
+    if (checked) {
+      if (!selectedSections.includes(code)) {
+        setSelectedSections([...selectedSections, code]);
+      }
+    } else {
+      setSelectedSections(selectedSections.filter((c) => c !== code));
+    }
+  };
+
+  const handleSelectAll = () => setSelectedSections(availableSections);
+  const handleClearAll = () => setSelectedSections([]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -134,7 +177,6 @@ const TabUploadContent = ({
                 <Input
                   id="quizTitle"
                   placeholder="Enter quiz title"
-                  /* Use our high‑contrast input styling */
                   className="ui-input mt-1"
                   value={quizTitle}
                   onChange={(e) => setQuizTitle(e.target.value)}
@@ -153,10 +195,69 @@ const TabUploadContent = ({
                 />
               </div>
 
+              {/* === NEW: Pretty multi-select with scrollable checkboxes === */}
+              <div>
+                <Label>Class Sections</Label>
+                <div className="mt-1 rounded-lg border bg-background">
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <span className="text-xs text-muted-foreground">
+                      {loadingSections ? 'Loading…' : `${selectedSections.length} selected`}
+                    </span>
+                    <div className="space-x-1">
+                      <Button type="button" variant="ghost" size="sm" onClick={handleSelectAll} disabled={loadingSections}>
+                        Select all
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={handleClearAll} disabled={loadingSections || selectedSections.length === 0}>
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-44 overflow-auto px-3 pb-2 pt-1">
+                    {availableSections.map((code) => {
+                      const checked = selectedSections.includes(code);
+                      return (
+                        <label
+                          key={code}
+                          className="flex items-center gap-3 py-1.5 cursor-pointer select-none hover:bg-muted/60 rounded-md px-2"
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={checked}
+                            onChange={(e) => toggleSection(code, e.target.checked)}
+                            disabled={loadingSections}
+                          />
+                          <span className="text-sm">{code}</span>
+                        </label>
+                      );
+                    })}
+                    {(!loadingSections && availableSections.length === 0) && (
+                      <p className="text-xs text-muted-foreground px-2 py-1.5">No sections found.</p>
+                    )}
+                  </div>
+                </div>
+
+                {selectedSections.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {selectedSections
+                      .slice()
+                      .sort()
+                      .map((code) => (
+                        <span
+                          key={code}
+                          className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary"
+                        >
+                          {code}
+                        </span>
+                      ))}
+                  </div>
+                )}
+              </div>
+
               <div className="mt-4">
                 <label
                   htmlFor="file-upload"
-                  /* Use ui-card-hover and ui-clickable for a clearer dropzone */
                   className={`ui-card-hover ui-clickable block w-full cursor-pointer border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
                     selectedFile
                       ? 'border-[hsl(var(--ring))] bg-[hsl(var(--ring))]/5'
@@ -209,7 +310,6 @@ const TabUploadContent = ({
                 </label>
               </div>
 
-              {/* The progress indicator and upload button have been simplified. */}
               <div className="pt-4">
                 <Button
                   onClick={handleContinue}

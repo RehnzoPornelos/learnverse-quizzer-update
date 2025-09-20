@@ -10,82 +10,88 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface TabCustomizeContentProps {
-  file: File | null; // <== NEW: file passed from previous step
+  file: File | null; // file passed from previous step
   onQuizReady: (quizData: any) => void;
 }
 
-const TabCustomizeContent = ({
-  file,
-  onQuizReady,
-}: TabCustomizeContentProps) => {
+const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) => {
   const [mcqCount, setMcqCount] = useState(5);
   const [tfCount, setTfCount] = useState(5);
   const [saCount, setSaCount] = useState(5);
   const [isGenerating, setIsGenerating] = useState(false);
-  // Additional quiz feature settings
-  // Time limit toggle and minutes field for quiz duration
+
+  // ---- Timer (no leading zeros + clean sync to localStorage) ----
   const [timeLimitEnabled, setTimeLimitEnabled] = useState(false);
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState<number>(0);
-  // Persisted randomize questions setting
+  const [timeLimitMinutesStr, setTimeLimitMinutesStr] = useState<string>(''); // keep as string to control formatting
+
+  // Randomize questions (persisted)
   const [randomizeQuestions, setRandomizeQuestions] = useState(() => {
-    // default to true; read previous value from localStorage if present
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('randomize_questions');
       if (stored === 'false') return false;
     }
     return true;
   });
-  // Remove adaptive learning toggle (deprecated)
-  const [issueCertificate, setIssueCertificate] = useState(false);
 
-  // Persist randomization preference in localStorage whenever it changes
+  // Persist randomization preference
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('randomize_questions', randomizeQuestions ? 'true' : 'false');
     }
   }, [randomizeQuestions]);
 
-  // Persist quiz duration in seconds whenever time limit or minutes changes
+  // Persist timer state + duration (seconds) with strict rules
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (timeLimitEnabled && timeLimitMinutes > 0) {
-        const seconds = timeLimitMinutes * 60;
-        localStorage.setItem('quiz_duration_seconds', seconds.toString());
-      } else {
-        localStorage.removeItem('quiz_duration_seconds');
-      }
+    if (typeof window === 'undefined') return;
+
+    const minutes = Math.max(0, parseInt(timeLimitMinutesStr || '0', 10) || 0);
+
+    if (timeLimitEnabled && minutes > 0) {
+      localStorage.setItem('quiz_timer_enabled', 'true');
+      localStorage.setItem('quiz_duration_seconds', String(minutes * 60));
+    } else {
+      localStorage.setItem('quiz_timer_enabled', 'false');
+      localStorage.removeItem('quiz_duration_seconds');
     }
-  }, [timeLimitEnabled, timeLimitMinutes]);
+  }, [timeLimitEnabled, timeLimitMinutesStr]);
 
   const handleGenerateQuiz = async () => {
     if (!file) {
-      toast.error("No file uploaded.");
+      toast.error('No file uploaded.');
       return;
+    }
+
+    // ⛔ Guard: if timer is on, a positive number of minutes is required
+    if (timeLimitEnabled) {
+      const minutes = parseInt(timeLimitMinutesStr || '0', 10) || 0;
+      if (minutes <= 0) {
+        toast.error('Please add a duration in minutes or turn off “Add Timer”.');
+        return;
+      }
     }
 
     setIsGenerating(true);
     const formData = new FormData();
-    formData.append("file", file);
-    formData.append("mcq_count", mcqCount.toString());
-    formData.append("sa_count", saCount.toString());
-    formData.append("tf_count", tfCount.toString());
+    formData.append('file', file);
+    formData.append('mcq_count', mcqCount.toString());
+    formData.append('sa_count', saCount.toString());
+    formData.append('tf_count', tfCount.toString());
 
     try {
-      // Use environment variable for backend URL when available
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
       const response = await fetch(`${backendUrl}/generate-quiz/`, {
-        method: "POST",
+        method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate quiz.");
+        throw new Error(errorData.error || 'Failed to generate quiz.');
       }
 
       const quizData = await response.json();
-      toast.success("Quiz generated successfully!");
-      onQuizReady(quizData); // send quiz to parent
+      toast.success('Quiz generated successfully!');
+      onQuizReady(quizData);
     } catch (err: any) {
       toast.error(`Error: ${err.message}`);
       console.error(err);
@@ -96,11 +102,7 @@ const TabCustomizeContent = ({
 
   return (
     <div className="grid grid-cols-1 gap-6">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-6">
@@ -154,22 +156,27 @@ const TabCustomizeContent = ({
                   <div>
                     <Label>Quiz Features</Label>
                     <div className="space-y-3 mt-2">
-                      {/* Time Limit Toggle */}
+                      {/* Timer */}
                       <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
                           <Label htmlFor="time-limit" className="text-sm cursor-pointer">
                             Add Timer
                           </Label>
-                          <p className="text-muted-foreground text-xs">
-                            Specify a time limit for completing the quiz
-                          </p>
+                          <p className="text-muted-foreground text-xs">Specify a time limit for completing the quiz</p>
                         </div>
                         <Switch
                           id="time-limit"
                           checked={timeLimitEnabled}
-                          onCheckedChange={(val: boolean) => setTimeLimitEnabled(val)}
+                          onCheckedChange={(val: boolean) => {
+                            setTimeLimitEnabled(val);
+                            if (val && (timeLimitMinutesStr === '0' || timeLimitMinutesStr === '')) {
+                              // Start with blank to avoid "0" prefix typing -> "025"
+                              setTimeLimitMinutesStr('');
+                            }
+                          }}
                         />
                       </div>
+
                       {timeLimitEnabled && (
                         <div className="mt-3">
                           <Label htmlFor="time-minutes" className="text-sm">
@@ -177,47 +184,40 @@ const TabCustomizeContent = ({
                           </Label>
                           <Input
                             id="time-minutes"
-                            type="number"
-                            min={1}
-                            value={timeLimitMinutes}
-                            onChange={(e) => setTimeLimitMinutes(parseInt(e.target.value) || 0)}
-                            className="ui-input mt-1"
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={timeLimitMinutesStr}
+                            onChange={(e) => {
+                              // keep digits only, strip leading zeros (except single '0')
+                              const cleaned = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+                              setTimeLimitMinutesStr(cleaned);
+                            }}
+                            onBlur={() => {
+                              // normalize on blur: empty or 0 clears timer persistence
+                              const cleaned = (timeLimitMinutesStr || '').replace(/^0+(?=\d)/, '');
+                              setTimeLimitMinutesStr(cleaned);
+                            }}
+                            className="ui-input mt-1 w-36"
                             placeholder="Enter minutes"
                           />
                         </div>
                       )}
+
                       <Separator />
-                      {/* Randomize Questions Toggle */}
+
+                      {/* Randomize Questions */}
                       <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
                           <Label htmlFor="randomize" className="text-sm cursor-pointer">
                             Randomize Questions
                           </Label>
-                          <p className="text-muted-foreground text-xs">
-                            Present questions in random order
-                          </p>
+                          <p className="text-muted-foreground text-xs">Present questions in random order</p>
                         </div>
                         <Switch
                           id="randomize"
                           checked={randomizeQuestions}
                           onCheckedChange={(val: boolean) => setRandomizeQuestions(val)}
-                        />
-                      </div>
-                      <Separator />
-                      {/* Issue Certificate Toggle */}
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="certificate" className="text-sm cursor-pointer">
-                            Issue Certificate
-                          </Label>
-                          <p className="text-muted-foreground text-xs">
-                            Generate completion certificate automatically
-                          </p>
-                        </div>
-                        <Switch
-                          id="certificate"
-                          checked={issueCertificate}
-                          onCheckedChange={(val: boolean) => setIssueCertificate(val)}
                         />
                       </div>
                     </div>
@@ -228,11 +228,7 @@ const TabCustomizeContent = ({
               <Separator />
 
               <div className="pt-2">
-                <Button 
-                  onClick={handleGenerateQuiz} 
-                  className="w-full"
-                  disabled={isGenerating}
-                >
+                <Button onClick={handleGenerateQuiz} className="w-full" disabled={isGenerating}>
                   {isGenerating ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
