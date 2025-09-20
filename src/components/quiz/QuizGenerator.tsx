@@ -6,10 +6,9 @@ import TabPreviewContent from './TabPreviewContent';
 import { QuizQuestion } from '@/services/quizService';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/context/AuthContext';
 import { nanoid } from 'nanoid';
+import { useAuth } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-
 
 interface QuizGeneratorProps {
   onPublish?: (quizData: any) => void;
@@ -18,31 +17,26 @@ interface QuizGeneratorProps {
 // Generate a short code similar to Quizizz
 const makeCode = () => nanoid(6).toUpperCase();
 
-// Map the UI question shape -> DB row for public.quiz_questions
+// Map UI question shape -> DB row for public.quiz_questions
 function mapQuestionToDBRow(q: any, quizId: string, index: number) {
   const type = q.type === 'essay' ? 'short_answer' : q.type;
-
   let options: any = null;
   let correct: any = null;
-
   if (type === 'mcq') {
     const choices = Array.isArray(q.choices) ? q.choices : [];
-    options = choices;                 // jsonb array of strings
-    correct = q.answer || '';          // store the TEXT of the correct choice
+    options = choices;
+    correct = q.answer || '';
   } else if (type === 'true_false') {
     options = null;
-    // Store as boolean for easier grading
     if (typeof q.answer === 'string') {
       correct = q.answer.toLowerCase() === 'true';
     } else {
       correct = !!q.answer;
     }
   } else {
-    // short_answer
     options = null;
     correct = q.answer ?? '';
   }
-
   return {
     quiz_id: quizId,
     text: q.question ?? '',
@@ -60,15 +54,9 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
   const [quizTitle, setQuizTitle] = useState('');
   const [quizDescription, setQuizDescription] = useState('');
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const { user } = useAuth();
-  const navigate = useNavigate();
-
-  // NEW: selected class section codes (UI only for now)
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
-
-  // Duration for the quiz in seconds. Persist across steps.
+  // Duration in seconds for the quiz. Persist across steps.
   const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('quiz_duration_seconds');
@@ -79,18 +67,22 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
     }
     return null;
   });
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
   const handleContinueToCustomize = () => {
     if (!selectedFile) {
-      toast.error("Please select a file to upload");
+      toast.error('Please select a file to upload');
       return;
     }
-
-    if (!quizTitle) {
-      toast.error("Please enter a quiz title");
+    if (!quizTitle.trim()) {
+      toast.error('Please enter a quiz title');
       return;
     }
-
+    if (selectedSections.length === 0) {
+      toast.error('Please select at least one class section');
+      return;
+    }
     setActiveTab('customize');
   };
 
@@ -104,6 +96,12 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
     setActiveTab('customize');
   };
 
+  /**
+   * Insert quiz and questions into Supabase. Also sync class sections and
+   * set is_rumbled/is_code_active flags. Uses randomize_questions
+   * persisted in localStorage to determine is_rumbled. After publish
+   * redirects to dashboard.
+   */
   const handlePublishQuiz = async () => {
     if (!user) {
       toast.error('You must be logged in to publish a quiz');
@@ -117,12 +115,21 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
       toast.error('Please add at least one question before publishing');
       return;
     }
-
+    if (selectedSections.length === 0) {
+      toast.error('Please select at least one class section');
+      return;
+    }
+    // Determine rumbled state from localStorage. Default to true.
+    let isRumbled = true;
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('randomize_questions');
+      if (stored === 'false') isRumbled = false;
+    }
     setIsPublishing(true);
     try {
-      // 1) Insert quiz
       const invitation_code = makeCode();
-      const { data: quizInsert, error: quizErr } = await supabase
+      // NOTE: cast supabase to any + select only safe columns so TS doesn't complain
+      const { data: quizInsert, error: quizErr } = await (supabase as any)
         .from('quizzes')
         .insert({
           user_id: user.id,
@@ -130,10 +137,13 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
           description: quizDescription || null,
           invitation_code,
           published: true,
-          // persist quiz duration seconds when provided
           quiz_duration_seconds: quizDurationSeconds ?? null,
+          // These columns exist in DB, but your generated types may lag.
+          // Keeping them in the INSERT is fine; we just don't select them back.
+          is_code_active: false,
+          is_rumbled: isRumbled,
         })
-        .select('id, title, description, invitation_code, published, created_at, quiz_duration_seconds')
+        .select('id, invitation_code')
         .single();
 
       if (quizErr || !quizInsert?.id) {
@@ -143,26 +153,34 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
         return;
       }
 
-      // 2) Insert questions (bulk)
+      // Insert questions
       const rows = quizQuestions.map((q, i) => mapQuestionToDBRow(q as any, quizInsert.id, i));
       const { error: questionsErr } = await supabase.from('quiz_questions').insert(rows);
-
       if (questionsErr) {
         console.error('Questions insert error:', questionsErr);
-        // Helpful hint if RLS/policy is the issue
         toast.error('Quiz saved, but questions failed to save. Check Row Level Security policies.');
         setIsPublishing(false);
         return;
       }
 
+      // Sync class sections via RPC
+      try {
+        const { error: syncErr } = await (supabase as any).rpc('sync_quiz_sections', {
+          p_quiz_id: quizInsert.id,
+          p_section_codes: selectedSections,
+        });
+        if (syncErr) {
+          console.error('Sync sections error:', syncErr);
+          toast.error('Quiz saved, but failed to link to class sections.');
+        }
+      } catch (err: any) {
+        console.error('RPC call failed:', err);
+        toast.error('Quiz saved, but failed to link to class sections.');
+      }
+
       toast.success(`Quiz published! Code: ${quizInsert.invitation_code}`);
-      // Optional callback
       if (onPublish) onPublish(quizInsert);
-      navigate('/dashboard'); // or '/dashboard?role=professor' if you prefer
-
-      // You can route or reset state here if you want:
-      // setActiveTab('upload'); setSelectedFile(null); setQuizGenerated(false); ...
-
+      navigate('/dashboard');
     } catch (e: any) {
       console.error(e);
       toast.error(`Publishing failed, please try again. ${e?.message || ''}`);
@@ -183,7 +201,6 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
           <p className="text-muted-foreground mt-1">Create AI-powered quizzes from your teaching materials</p>
         </div>
       </div>
-
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-3 mb-8">
           <TabsTrigger value="upload">Upload Content</TabsTrigger>
@@ -191,36 +208,27 @@ const QuizGenerator = ({ onPublish }: QuizGeneratorProps) => {
             Customize Quiz
           </TabsTrigger>
           <TabsTrigger value="preview" disabled={!quizGenerated}>
-            Preview & Save
+            Preview &amp; Save
           </TabsTrigger>
         </TabsList>
-
         <TabsContent value="upload">
-          <TabUploadContent 
+          <TabUploadContent
             selectedFile={selectedFile}
             setSelectedFile={setSelectedFile}
             quizTitle={quizTitle}
             setQuizTitle={setQuizTitle}
             quizDescription={quizDescription}
             setQuizDescription={setQuizDescription}
-
-            /* NEW: pass multi-select state */
             selectedSections={selectedSections}
             setSelectedSections={setSelectedSections}
-
             onContinue={handleContinueToCustomize}
           />
         </TabsContent>
-
         <TabsContent value="customize">
-          <TabCustomizeContent 
-            file={selectedFile}
-            onQuizReady={handleQuizReady}
-          />
+          <TabCustomizeContent file={selectedFile} onQuizReady={handleQuizReady} />
         </TabsContent>
-
         <TabsContent value="preview">
-          <TabPreviewContent 
+          <TabPreviewContent
             quizTitle={quizTitle}
             onBack={handleBackToCustomize}
             onPublish={handlePublishQuiz}

@@ -9,6 +9,14 @@ import { BookOpen, FileText, FilePlus, Plus, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
+/**
+ * TabUploadContent is the first step of the quiz creation flow. Professors
+ * upload a document (PDF, DOCX, PPTX, TXT) and provide a title/description.
+ * They must also pick at least one class section to target. Section codes
+ * come from the `class_sections` table. A multi-select checkbox list allows
+ * selecting multiple sections without holding Ctrl/⌘. Validation ensures a
+ * file, title and at least one section are chosen before continuing.
+ */
 interface TabUploadContentProps {
   selectedFile: File | null;
   setSelectedFile: (file: File | null) => void;
@@ -17,11 +25,12 @@ interface TabUploadContentProps {
   quizDescription: string;
   setQuizDescription: (description: string) => void;
 
-  /** selected class section codes (e.g., ["IT-32","CYB-21"]) */
+  /** Selected class section codes (e.g., ["IT-32","CYB-21"]). */
   selectedSections: string[];
-  /** setter for the selected section codes */
+  /** Setter for the selected section codes. */
   setSelectedSections: (codes: string[]) => void;
 
+  /** Fired when the professor wants to advance to the customize step. */
   onContinue: () => void;
 }
 
@@ -36,7 +45,7 @@ const TabUploadContent = ({
   setSelectedSections,
   onContinue,
 }: TabUploadContentProps) => {
-  // List of available section codes from public.class_sections
+  // List of available section codes fetched from Supabase. Sorted ASC.
   const [availableSections, setAvailableSections] = useState<string[]>([]);
   const [loadingSections, setLoadingSections] = useState<boolean>(false);
 
@@ -45,20 +54,16 @@ const TabUploadContent = ({
     (async () => {
       setLoadingSections(true);
       try {
-        // Loosened typing to avoid mismatch if types lag behind
         const { data, error } = await (supabase as any)
           .from('class_sections')
           .select('code')
           .order('code', { ascending: true });
-
         if (!isMounted) return;
-
         if (error) {
           console.error('Failed to load class sections:', error);
           toast.error('Could not load class sections. Please try again later.');
           return;
         }
-
         const codes = Array.isArray(data) ? data.map((r: any) => String(r.code)) : [];
         setAvailableSections(codes);
       } finally {
@@ -70,24 +75,25 @@ const TabUploadContent = ({
     };
   }, []);
 
+  /**
+   * Handle file selection from the file input. Performs basic validation
+   * for allowed types and max size (20MB). Suggests a title based on
+   * filename if none has been entered yet.
+   */
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
-
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
-        toast.error(`Invalid file type. Please upload one of the following: ${allowedExtensions.join(', ')}`);
+        toast.error(`Invalid file type. Please upload one of: ${allowedExtensions.join(', ')}`);
         return;
       }
-
       if (file.size > 20 * 1024 * 1024) {
         toast.error('File is too large. Maximum size is 20MB.');
         return;
       }
-
       setSelectedFile(file);
-
       if (!quizTitle) {
         const suggestedTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
         setQuizTitle(suggestedTitle);
@@ -95,6 +101,11 @@ const TabUploadContent = ({
     }
   };
 
+  /**
+   * Handler for the Continue button. Validates that a file is uploaded,
+   * a title has been entered and at least one section is selected. If
+   * validation passes, calls the provided `onContinue` callback.
+   */
   const handleContinue = () => {
     if (!selectedFile) {
       toast.error('Please select a file first');
@@ -104,29 +115,28 @@ const TabUploadContent = ({
       toast.error('Please enter a quiz title');
       return;
     }
+    if (selectedSections.length === 0) {
+      toast.error('Please select at least one class section');
+      return;
+    }
     onContinue();
   };
 
   const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
-
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
-
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
-        toast.error(`Invalid file type. Please upload one of the following: ${allowedExtensions.join(', ')}`);
+        toast.error(`Invalid file type. Please upload one of: ${allowedExtensions.join(', ')}`);
         return;
       }
-
       if (file.size > 20 * 1024 * 1024) {
         toast.error('File is too large. Maximum size is 20MB.');
         return;
       }
-
       setSelectedFile(file);
-
       if (!quizTitle) {
         const suggestedTitle = file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
         setQuizTitle(suggestedTitle);
@@ -138,7 +148,7 @@ const TabUploadContent = ({
     e.preventDefault();
   };
 
-  // === NEW helpers for checkbox UI ===
+  /** Toggle a single section in the selection list. */
   const toggleSection = (code: string, checked: boolean) => {
     if (checked) {
       if (!selectedSections.includes(code)) {
@@ -154,11 +164,7 @@ const TabUploadContent = ({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-4">
@@ -169,7 +175,7 @@ const TabUploadContent = ({
                 </div>
               </div>
               <p className="text-muted-foreground">
-                Upload your lecture notes, research papers, or textbook chapters. Our AI will analyze the content and generate intelligent quiz questions using HuggingFace's advanced PDF-to-Quiz model.
+                Upload your lecture notes, research papers, or textbook chapters. Our AI will analyze the content and generate intelligent quiz questions using advanced models.
               </p>
 
               <div>
@@ -195,7 +201,7 @@ const TabUploadContent = ({
                 />
               </div>
 
-              {/* === NEW: Pretty multi-select with scrollable checkboxes === */}
+              {/* Class section multi-select */}
               <div>
                 <Label>Class Sections</Label>
                 <div className="mt-1 rounded-lg border bg-background">
@@ -207,12 +213,17 @@ const TabUploadContent = ({
                       <Button type="button" variant="ghost" size="sm" onClick={handleSelectAll} disabled={loadingSections}>
                         Select all
                       </Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={handleClearAll} disabled={loadingSections || selectedSections.length === 0}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearAll}
+                        disabled={loadingSections || selectedSections.length === 0}
+                      >
                         Clear
                       </Button>
                     </div>
                   </div>
-
                   <div className="max-h-44 overflow-auto px-3 pb-2 pt-1">
                     {availableSections.map((code) => {
                       const checked = selectedSections.includes(code);
@@ -232,7 +243,7 @@ const TabUploadContent = ({
                         </label>
                       );
                     })}
-                    {(!loadingSections && availableSections.length === 0) && (
+                    {!loadingSections && availableSections.length === 0 && (
                       <p className="text-xs text-muted-foreground px-2 py-1.5">No sections found.</p>
                     )}
                   </div>
@@ -244,10 +255,7 @@ const TabUploadContent = ({
                       .slice()
                       .sort()
                       .map((code) => (
-                        <span
-                          key={code}
-                          className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary"
-                        >
+                        <span key={code} className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
                           {code}
                         </span>
                       ))}
@@ -283,16 +291,13 @@ const TabUploadContent = ({
                             setSelectedFile(null);
                           }}
                         >
-                          <X className="h-4 w-4 mr-1" />
-                          Remove
+                          <X className="h-4 w-4 mr-1" /> Remove
                         </Button>
                       </>
                     ) : (
                       <>
                         <Upload className="h-10 w-10 text-muted-foreground mb-2" />
-                        <p className="text-sm font-medium">
-                          Drag and drop your file here or click to browse
-                        </p>
+                        <p className="text-sm font-medium">Drag and drop your file here or click to browse</p>
                         <p className="text-xs text-muted-foreground mt-1">
                           Supports PDF, DOCX, PPTX, and TXT files up to 20MB
                         </p>
@@ -311,9 +316,19 @@ const TabUploadContent = ({
               </div>
 
               <div className="pt-4">
+                {/*
+                  Disable the Continue button unless the user has uploaded
+                  a file, entered a non-empty title and selected at least
+                  one class section. Previously the button only checked
+                  for file and title which allowed proceeding without
+                  selecting a section. Since the section selection is
+                  required, we include that condition here. We still
+                  perform the toast warning on click in case the user
+                  bypasses the button disable (e.g. via keyboard).
+                */}
                 <Button
                   onClick={handleContinue}
-                  disabled={!selectedFile || !quizTitle.trim()}
+                  disabled={!selectedFile || !quizTitle.trim() || selectedSections.length === 0}
                   className="w-full"
                 >
                   Continue
@@ -339,7 +354,7 @@ const TabUploadContent = ({
                 </div>
               </div>
               <p className="text-muted-foreground">
-                Using HuggingFace's advanced PDF-to-Quiz model for intelligent question generation:
+                Our models analyze your documents to identify key concepts and learning objectives.
               </p>
 
               <div className="space-y-4">

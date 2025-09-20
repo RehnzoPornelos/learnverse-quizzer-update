@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ArrowLeft } from 'lucide-react';
-import { QuizQuestion } from '@/services/quizService';
 import { Switch } from '@/components/ui/switch';
+import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
+import type { QuizQuestion } from '@/services/quizService';
 
 interface TabPreviewContentProps {
   quizTitle: string;
@@ -16,21 +16,9 @@ interface TabPreviewContentProps {
   isPublishing: boolean;
   onQuestionsUpdated: (questions: QuizQuestion[]) => void;
   initialQuestions?: QuizQuestion[];
-  /** Optional initial duration in seconds for quizzes with timers */
   initialDurationSeconds?: number;
-  /** Callback when duration is updated (seconds). Use undefined or 0 for no timer */
   onDurationUpdated?: (seconds: number) => void;
-  /** Hide internal header buttons (Back/Publish) when embedding within QuizEdit */
   hideHeaderActions?: boolean;
-}
-
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
 }
 
 const TabPreviewContent = ({
@@ -44,143 +32,83 @@ const TabPreviewContent = ({
   onDurationUpdated,
   hideHeaderActions = false,
 }: TabPreviewContentProps) => {
+  /** Questions shown to professor (never shuffled in Preview). */
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [hasInitialized, setHasInitialized] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
 
-  // ---- Timer (read explicit flag from localStorage; no leading zeros) ----
-  const [timerEnabled, setTimerEnabled] = useState<boolean>(false);
-  const [durationMinutesStr, setDurationMinutesStr] = useState<string>(''); // string for formatting control
+  /** Randomize preference (persist only; do NOT reorder here). */
+  const [randomizeEnabled, setRandomizeEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('randomize_questions') !== 'false';
+    }
+    return true;
+  });
 
-  // guard to hydrate timer ONCE to avoid any flicker/loop
-  const timerHydratedRef = useRef(false);
+  /** Timer state */
+  const [timerEnabled, setTimerEnabled] = useState(false);
+  const [durationMinutesStr, setDurationMinutesStr] = useState('');
 
-  const updateQuestions = (updated: QuizQuestion[]) => {
-    setQuestions(updated);
-    onQuestionsUpdated(updated);
-  };
+  /** Avoid persisting timer to localStorage before hydration is done. */
+  const hydratedRef = useRef(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const handleQuestionFieldChange = (index: number, field: string, value: any) => {
-    const updated = questions.map((q, i) => {
-      if (i !== index) return q;
-      const updatedQuestion: any = { ...q };
-      updatedQuestion[field] = value;
-      return updatedQuestion;
-    });
-    updateQuestions(updated);
-  };
-
-  const handleChoiceChange = (questionIndex: number, choiceIndex: number, value: string) => {
-    const updated = questions.map((q, i) => {
-      if (i !== questionIndex) return q;
-      const choices = Array.isArray((q as any).choices)
-        ? ([...(q as any).choices] as string[])
-        : ['', '', '', ''];
-      choices[choiceIndex] = value;
-      return { ...q, choices } as any;
-    });
-    updateQuestions(updated);
-  };
-
-  const handleTypeChange = (index: number, newType: string) => {
-    const updated = questions.map((q, i) => {
-      if (i !== index) return q;
-      const base = { ...q, type: newType } as any;
-      if (newType === 'mcq') {
-        base.choices = base.choices && Array.isArray(base.choices) ? base.choices : ['', '', '', ''];
-        base.answer = base.answer || '';
-      } else if (newType === 'true_false') {
-        base.answer = base.answer === 'False' ? 'False' : 'True';
-        delete base.choices;
-      } else if (newType === 'short_answer') {
-        base.answer = '';
-        delete base.choices;
-      }
-      return base;
-    });
-    updateQuestions(updated);
-  };
-
-  const handleDeleteQuestion = (index: number) => {
-    const updated = questions.filter((_, i) => i !== index);
-    updateQuestions(updated);
-  };
-
-  const handleAddQuestion = () => {
-    const newQuestion: any = {
-      id: `question-${Date.now()}`,
-      type: 'mcq',
-      question: '',
-      choices: ['', '', '', ''],
-      answer: '',
-    };
-    const updated = [...questions, newQuestion];
-    updateQuestions(updated);
-    setTimeout(() => {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }, 100);
-  };
-
-  // Initialize questions
+  /** ---- Hydrate from inputs/localStorage (ONCE) ---- */
   useEffect(() => {
-    if (!hasInitialized && initialQuestions.length > 0) {
-      const normalized = initialQuestions.map((q: any, index) => {
-        const id = q.id || `question-${Date.now()}-${index}`;
-        const type = q.type === 'essay' ? 'short_answer' : q.type;
-        const base: any = { ...q, id, type, order_position: index };
+    if (hasInitialized) return;
 
-        if (type === 'mcq' && base.answer) {
-          const choices: string[] = Array.isArray(base.choices) ? base.choices : [];
-          const ansRaw = String(base.answer).trim();
+    // normalize incoming questions; keep original order
+    const normalized = initialQuestions.map((q: any, index) => {
+      const id = q.id || `question-${Date.now()}-${index}`;
+      const type = q.type === 'essay' ? 'short_answer' : q.type;
+      const base: any = { ...q, id, type };
+
+      if (type === 'mcq') {
+        base.choices = Array.isArray(q.choices) ? q.choices : ['', '', '', ''];
+        if (q.answer != null) {
+          const ansRaw = String(q.answer).trim();
           let normalizedAns = '';
 
-          const numericIndex = parseInt(ansRaw);
+          const numericIndex = parseInt(ansRaw, 10);
           if (!isNaN(numericIndex)) {
             const idx = numericIndex - 1;
-            if (idx >= 0 && idx < choices.length) {
-              normalizedAns = choices[idx];
-            }
+            if (idx >= 0 && idx < base.choices.length) normalizedAns = base.choices[idx];
           }
           if (!normalizedAns) {
-            const letterIndex = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(ansRaw.toUpperCase());
-            if (letterIndex >= 0 && letterIndex < choices.length) {
-              normalizedAns = choices[letterIndex];
-            }
+            const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(ansRaw.toUpperCase());
+            if (alpha >= 0 && alpha < base.choices.length) normalizedAns = base.choices[alpha];
           }
           if (!normalizedAns) {
-            const found = choices.find((c) => c.trim().toLowerCase() === ansRaw.toLowerCase());
+            const found = base.choices.find(
+              (c: string) => c.trim().toLowerCase() === ansRaw.toLowerCase(),
+            );
             if (found) normalizedAns = found;
           }
           base.answer = normalizedAns || ansRaw;
         }
+      } else if (type === 'true_false') {
+        if (typeof q.answer === 'boolean') base.answer = q.answer ? 'True' : 'False';
+        else base.answer = q.answer ?? 'True';
+        delete base.choices;
+      } else {
+        // short_answer
+        base.answer = q.answer ?? '';
+        delete base.choices;
+      }
 
-        if (type === 'true_false' && base.answer !== undefined) {
-          if (typeof base.answer === 'boolean') {
-            base.answer = base.answer ? 'True' : 'False';
-          }
-        }
-        return base;
-      });
+      return base;
+    });
 
-      const randomize = localStorage.getItem('randomize_questions') === 'true';
-      const ordered = randomize ? shuffleArray(normalized) : normalized;
-      setQuestions(ordered);
-      onQuestionsUpdated(ordered);
-      setHasInitialized(true);
-    }
-  }, [initialQuestions, hasInitialized, onQuestionsUpdated]);
+    setQuestions(normalized);
+    onQuestionsUpdated(normalized);
 
-  // Initialize timer ONCE (prevents any on/off flicker loop)
-  useEffect(() => {
-    if (timerHydratedRef.current) return; // already hydrated once
-
+    // ----- Timer hydration -----
     let enabled: boolean | null = null;
     let seconds: number | null = null;
 
     if (typeof window !== 'undefined') {
       const flag = localStorage.getItem('quiz_timer_enabled');
       if (flag === 'true') enabled = true;
-      if (flag === 'false') enabled = false;
+      else if (flag === 'false') enabled = false;
 
       const stored = localStorage.getItem('quiz_duration_seconds');
       if (stored) {
@@ -189,7 +117,6 @@ const TabPreviewContent = ({
       }
     }
 
-    // fall back to prop only when we have no explicit flag
     if (enabled === null && typeof initialDurationSeconds === 'number') {
       if (initialDurationSeconds > 0) {
         enabled = true;
@@ -202,43 +129,107 @@ const TabPreviewContent = ({
 
     if (enabled && seconds && seconds > 0) {
       setTimerEnabled(true);
-      setDurationMinutesStr(String(Math.ceil(seconds / 60))); // no leading zeros
+      setDurationMinutesStr(String(Math.ceil(seconds / 60)));
     } else {
       setTimerEnabled(false);
       setDurationMinutesStr('');
     }
 
-    timerHydratedRef.current = true;
+    hydratedRef.current = true;
+    setHasInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // <-- run once only
+  }, [hasInitialized, initialQuestions, initialDurationSeconds]);
 
-  // Persist timer changes back to localStorage + parent callback
+  /** Persist timer to localStorage AFTER hydration and reflect up to parent. */
   useEffect(() => {
+    if (!hydratedRef.current) return;
     if (typeof window === 'undefined') return;
 
     const minutes = Math.max(0, parseInt(durationMinutesStr || '0', 10) || 0);
-
     if (timerEnabled && minutes > 0) {
       localStorage.setItem('quiz_timer_enabled', 'true');
       localStorage.setItem('quiz_duration_seconds', String(minutes * 60));
-      if (onDurationUpdated) onDurationUpdated(minutes * 60);
+      onDurationUpdated?.(minutes * 60);
     } else {
       localStorage.setItem('quiz_timer_enabled', 'false');
       localStorage.removeItem('quiz_duration_seconds');
-      if (onDurationUpdated) onDurationUpdated(0);
+      onDurationUpdated?.(0);
     }
   }, [timerEnabled, durationMinutesStr, onDurationUpdated]);
 
-  useEffect(() => {
-    if (hasInitialized) onQuestionsUpdated(questions);
-  }, [questions, hasInitialized, onQuestionsUpdated]);
+  /** Toggle randomize: store only; do NOT reorder preview list. */
+  const handleRandomizeToggle = (val: boolean) => {
+    setRandomizeEnabled(val);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('randomize_questions', val ? 'true' : 'false');
+    }
+  };
+
+  /** Helpers for editing questions in-place */
+  const updateQuestions = (next: QuizQuestion[]) => {
+    setQuestions(next);
+    onQuestionsUpdated(next);
+  };
+
+  const handleTypeChange = (idx: number, newType: string) => {
+    const next = questions.map((q, i) => {
+      if (i !== idx) return q;
+      const base: any = { ...q, type: newType as any };
+      if (newType === 'mcq') {
+        base.choices = Array.isArray((q as any).choices) ? (q as any).choices : ['', '', '', ''];
+        base.answer = base.answer ?? '';
+      } else if (newType === 'true_false') {
+        base.answer = base.answer === 'False' ? 'False' : 'True';
+        delete base.choices;
+      } else {
+        base.answer = base.answer ?? '';
+        delete base.choices;
+      }
+      return base as QuizQuestion;
+    });
+    updateQuestions(next);
+  };
+
+  const handleFieldChange = (idx: number, field: 'question' | 'answer', value: string) => {
+    const next = questions.map((q, i) => (i === idx ? ({ ...q, [field]: value } as QuizQuestion) : q));
+    updateQuestions(next);
+  };
+
+  const handleChoiceChange = (qIdx: number, cIdx: number, value: string) => {
+    const next = questions.map((q, i) => {
+      if (i !== qIdx) return q;
+      const choices = Array.isArray((q as any).choices)
+        ? ([...(q as any).choices] as string[])
+        : ['', '', '', ''];
+      choices[cIdx] = value;
+      return { ...(q as any), choices } as QuizQuestion;
+    });
+    updateQuestions(next);
+  };
+
+  const handleDelete = (idx: number) => {
+    const next = questions.filter((_, i) => i !== idx);
+    updateQuestions(next);
+  };
+
+  const handleAdd = () => {
+    const newQ: any = {
+      id: `q-${Date.now()}`,
+      type: 'mcq',
+      question: '',
+      choices: ['', '', '', ''],
+      answer: '',
+    };
+    const next = [...questions, newQ];
+    updateQuestions(next);
+    setTimeout(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }), 50);
+  };
 
   const handlePublishClick = () => {
-    // ⛔ Guard: if timer is on, a positive number of minutes is required
     if (timerEnabled) {
       const minutes = parseInt(durationMinutesStr || '0', 10) || 0;
       if (minutes <= 0) {
-        toast.error('Please add a duration in minutes or turn off “Add Timer”.');
+        toast.error('Please enter a positive duration in minutes or turn off “Add Timer”.');
         return;
       }
     }
@@ -248,7 +239,7 @@ const TabPreviewContent = ({
 
   return (
     <div className="space-y-6">
-      {/* Header with quiz title and actions */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">{quizTitle}</h2>
@@ -268,13 +259,11 @@ const TabPreviewContent = ({
 
       <Separator />
 
-      {/* Timer settings */}
+      {/* Timer + Randomize preference (no shuffling here) */}
       <div className="space-y-3">
         <div className="flex items-start justify-between">
           <div className="space-y-0.5">
-            <Label htmlFor="quiz-timer" className="text-sm cursor-pointer">
-              Add Timer
-            </Label>
+            <Label htmlFor="quiz-timer" className="text-sm cursor-pointer">Add Timer</Label>
             <p className="text-muted-foreground text-xs">Set a time limit for completing the quiz</p>
           </div>
           <Switch
@@ -282,9 +271,7 @@ const TabPreviewContent = ({
             checked={timerEnabled}
             onCheckedChange={(val: boolean) => {
               setTimerEnabled(val);
-              if (val && (durationMinutesStr === '0' || durationMinutesStr === '')) {
-                setDurationMinutesStr('');
-              }
+              if (val && (durationMinutesStr === '0' || durationMinutesStr === '')) setDurationMinutesStr('');
             }}
           />
         </div>
@@ -310,17 +297,30 @@ const TabPreviewContent = ({
             <span className="text-sm text-muted-foreground">minutes</span>
           </div>
         )}
+
+        <div className="flex items-start justify-between">
+          <div className="space-y-0.5">
+            <Label htmlFor="quiz-randomize" className="text-sm cursor-pointer">Randomize Questions</Label>
+            <p className="text-muted-foreground text-xs">Preference only — preview order stays the same</p>
+          </div>
+          <Switch
+            id="quiz-randomize"
+            checked={randomizeEnabled}
+            onCheckedChange={handleRandomizeToggle}
+          />
+        </div>
       </div>
 
       <Separator />
 
-      <div ref={scrollRef} className="space-y-4 max-h-[500px] overflow-auto pr-2">
+      {/* Questions list (kept in the same order) */}
+      <div ref={listRef} className="space-y-4 max-h-[500px] overflow-auto pr-2">
         {questions.map((q, index) => (
           <Card key={q.id || index} className="border rounded-md">
             <CardContent className="space-y-3 pt-4">
               <div className="flex items-center justify-between">
                 <span className="font-medium">Question {index + 1}</span>
-                <Button variant="outline" size="sm" onClick={() => handleDeleteQuestion(index)}>
+                <Button variant="outline" size="sm" onClick={() => handleDelete(index)}>
                   Delete
                 </Button>
               </div>
@@ -344,7 +344,7 @@ const TabPreviewContent = ({
                   <Input
                     className="ui-input mt-1"
                     value={(q as any).question ?? ''}
-                    onChange={(e) => handleQuestionFieldChange(index, 'question', e.target.value)}
+                    onChange={(e) => handleFieldChange(index, 'question', e.target.value)}
                     placeholder="Enter question text"
                   />
                 </div>
@@ -363,12 +363,13 @@ const TabPreviewContent = ({
                         />
                       ))}
                     </div>
+
                     <div className="mt-2">
                       <Label className="text-sm">Correct Answer</Label>
                       <select
                         className="ui-select mt-1 text-sm"
                         value={(q as any).answer ?? ''}
-                        onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
+                        onChange={(e) => handleFieldChange(index, 'answer', e.target.value)}
                       >
                         <option value="">Select answer</option>
                         {((q as any).choices || []).map((choice: string, cIndex: number) => (
@@ -387,7 +388,7 @@ const TabPreviewContent = ({
                     <select
                       className="ui-select mt-1 text-sm"
                       value={(q as any).answer ?? ''}
-                      onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
+                      onChange={(e) => handleFieldChange(index, 'answer', e.target.value)}
                     >
                       <option value="True">True</option>
                       <option value="False">False</option>
@@ -401,7 +402,7 @@ const TabPreviewContent = ({
                     <Input
                       className="ui-input mt-1"
                       value={(q as any).answer ?? ''}
-                      onChange={(e) => handleQuestionFieldChange(index, 'answer', e.target.value)}
+                      onChange={(e) => handleFieldChange(index, 'answer', e.target.value)}
                       placeholder="Enter answer"
                     />
                   </div>
@@ -413,7 +414,7 @@ const TabPreviewContent = ({
       </div>
 
       <div className="pt-2">
-        <Button variant="outline" onClick={handleAddQuestion} className="w-full">
+        <Button variant="outline" onClick={handleAdd} className="w-full">
           Add Question
         </Button>
       </div>
