@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -8,6 +7,7 @@ import { getQuizWithQuestions, saveQuiz } from '@/services/quizService';
 import { Button } from "@/components/ui/button";
 import { Loader2, Save, ArrowLeft } from "lucide-react";
 import TabPreviewContent from '@/components/quiz/TabPreviewContent';
+import { Switch } from '@/components/ui/switch';
 
 const QuizEdit = () => {
   const { id } = useParams<{ id: string }>();
@@ -18,64 +18,56 @@ const QuizEdit = () => {
   const [saving, setSaving] = useState(false);
   const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(null);
 
+  // Activation toggle state (LOCAL ONLY until Save)
+  const [isCodeActive, setIsCodeActive] = useState<boolean>(false);
+  const [activationDirty, setActivationDirty] = useState<boolean>(false);
+
   // Allow editing the quiz title locally
   const handleTitleChange = (e: any) => {
     const newTitle = e.target.value;
-    setQuiz((prev: any) => {
-      if (!prev) return prev;
-      return { ...prev, title: newTitle };
-    });
+    setQuiz((prev: any) => (prev ? { ...prev, title: newTitle } : prev));
   };
 
   useEffect(() => {
     window.scrollTo(0, 0);
-    
+
     const fetchQuiz = async () => {
       try {
         if (!id) return;
         const quizData = await getQuizWithQuestions(id);
-        console.log('Fetched quiz data:', quizData);
         setQuiz(quizData);
-        // Convert questions from DB format to UI format expected by TabPreviewContent
+
+        // Normalize questions for editor
         const uiQuestions = (quizData.questions || []).map((q: any) => {
-          // Normalize DB type to UI type.  The database stores types such as
-          // 'multiple_choice', 'true_false' and 'essay'.  Convert
-          // 'multiple_choice' to 'mcq' for the editor; leave other types as-is.
           let uiType = q.type;
-          if (q.type === 'multiple_choice') {
-            uiType = 'mcq';
-          }
-          // Build the UI question object
+          if (q.type === 'multiple_choice') uiType = 'mcq';
+
           const uiQuestion: any = {
             id: q.id,
             type: uiType,
             question: q.text,
-            // For MCQ, options/choices is an array of strings
             choices: Array.isArray(q.options) ? q.options : [],
           };
-          // Determine answer formatting based on UI type
+
           if (uiType === 'mcq') {
-            // store correct answer as the option text or letter if not found
             uiQuestion.answer = q.correct_answer ?? '';
           } else if (uiType === 'true_false') {
-            // convert boolean to string 'True'/'False'
             const ans = q.correct_answer;
-            if (typeof ans === 'boolean') {
-              uiQuestion.answer = ans ? 'True' : 'False';
-            } else if (typeof ans === 'string') {
-              uiQuestion.answer = ans;
-            } else {
-              uiQuestion.answer = '';
-            }
+            if (typeof ans === 'boolean') uiQuestion.answer = ans ? 'True' : 'False';
+            else if (typeof ans === 'string') uiQuestion.answer = ans;
+            else uiQuestion.answer = '';
           } else {
-            // essay/short answer: use text or empty
             uiQuestion.answer = q.correct_answer ?? '';
           }
           return uiQuestion;
         });
         setQuestions(uiQuestions);
-        // Save duration if available
+
         setQuizDurationSeconds(quizData.quiz_duration_seconds ?? null);
+
+        // hydrate activation flag
+        setIsCodeActive(Boolean((quizData as any).is_code_active));
+        setActivationDirty(false);
       } catch (error) {
         console.error('Error fetching quiz:', error);
         toast.error('Failed to load quiz');
@@ -88,52 +80,56 @@ const QuizEdit = () => {
   }, [id]);
 
   const handleQuestionsUpdated = (updatedQuestions: any[]) => {
-    console.log('Questions updated:', updatedQuestions);
     setQuestions(updatedQuestions);
   };
 
   const handleSaveQuiz = async () => {
     if (!quiz) return;
-    
+
     try {
       setSaving(true);
-      // Convert UI questions back to DB format
+      // normalize UI -> DB rows (keep DB types: 'mcq' | 'true_false' | 'short_answer')
       const dbQuestions = questions.map((q: any, index: number) => {
-        const dbQuestion: any = {
-          id: q.id || undefined,
+        let dbType = q.type === 'multiple_choice' ? 'mcq' : q.type;
+        const allowed = ['mcq', 'true_false', 'short_answer'];
+        if (!allowed.includes(dbType)) dbType = 'mcq';
+
+        const row: any = {
+          id: q.id || undefined,                 // may be a non-uuid temp id; saveQuiz filters this
           text: q.question ?? '',
-          type: q.type,
+          type: dbType,
           order_position: index,
         };
-        if (q.type === 'mcq') {
-          dbQuestion.options = Array.isArray(q.choices) ? q.choices : [];
-          dbQuestion.correct_answer = q.answer ?? '';
-        } else if (q.type === 'true_false') {
-          dbQuestion.options = null;
-          // convert answer string to boolean
-          if (typeof q.answer === 'string') {
-            dbQuestion.correct_answer = q.answer.toLowerCase() === 'true';
-          } else {
-            dbQuestion.correct_answer = !!q.answer;
-          }
+
+        if (dbType === 'mcq') {
+          row.options = Array.isArray(q.choices) ? q.choices : [];
+          row.correct_answer = q.answer ?? '';
+        } else if (dbType === 'true_false') {
+          row.options = null;
+          row.correct_answer =
+            typeof q.answer === 'string' ? q.answer.toLowerCase() === 'true' : !!q.answer;
         } else {
-          // short answer
-          dbQuestion.options = null;
-          dbQuestion.correct_answer = q.answer ?? '';
+          row.options = null;
+          row.correct_answer = q.answer ?? '';
         }
-        return dbQuestion;
+
+        return row;
       });
+
       await saveQuiz(
         {
           id: quiz.id,
           title: quiz.title,
           description: quiz.description || '',
           published: quiz.published,
-          quiz_duration_seconds: quizDurationSeconds ?? undefined,
+          quiz_duration_seconds: quizDurationSeconds ?? null,
+          // <-- persist activation together with other updates
+          is_code_active: isCodeActive,
         },
         dbQuestions
       );
       toast.success('Quiz saved successfully');
+      setActivationDirty(false);
       navigate('/dashboard');
     } catch (error) {
       console.error('Error saving quiz:', error);
@@ -174,10 +170,7 @@ const QuizEdit = () => {
                     <ArrowLeft className="mr-2 h-4 w-4" />
                     Back to Dashboard
                   </Button>
-                  <Button 
-                    onClick={handleSaveQuiz}
-                    disabled={saving}
-                  >
+                  <Button onClick={handleSaveQuiz} disabled={saving}>
                     {saving ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -192,10 +185,12 @@ const QuizEdit = () => {
                   </Button>
                 </div>
               </div>
-              
-              {/* Field to edit the quiz name */}
+
+              {/* Quiz Name */}
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-foreground" htmlFor="quiz-name">Quiz Name</label>
+                <label className="block text-sm font-medium text-foreground" htmlFor="quiz-name">
+                  Quiz Name
+                </label>
                 <input
                   id="quiz-name"
                   type="text"
@@ -205,6 +200,31 @@ const QuizEdit = () => {
                 />
               </div>
 
+              {/* Activate quiz toggle (local until Save) */}
+              <div className="flex items-center justify-between rounded-md border bg-background px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Activation</p>
+                  <p className="text-xs text-muted-foreground">
+                    Only <span className="font-medium">Active</span> quizzes can be used to start a class session.
+                    {activationDirty && (
+                      <span className="ml-1 text-amber-600">— unsaved change</span>
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs ${isCodeActive ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    {isCodeActive ? 'Active' : 'Inactive'}
+                  </span>
+                  <Switch
+                    checked={isCodeActive}
+                    onCheckedChange={(next: boolean) => {
+                      setIsCodeActive(next);
+                      setActivationDirty(true);
+                    }}
+                  />
+                </div>
+              </div>
+
               <TabPreviewContent
                 quizTitle={quiz.title}
                 onBack={handleBackClick}
@@ -212,7 +232,6 @@ const QuizEdit = () => {
                 isPublishing={saving}
                 onQuestionsUpdated={handleQuestionsUpdated}
                 initialQuestions={questions}
-                // Provide initial duration and update callback for timer
                 initialDurationSeconds={quizDurationSeconds !== null ? quizDurationSeconds : undefined}
                 onDurationUpdated={(sec: number) => setQuizDurationSeconds(sec || null)}
                 hideHeaderActions

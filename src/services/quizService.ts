@@ -1,6 +1,10 @@
 import { supabase } from '@/integrations/supabase/client';
 import { v4 as uuidv4 } from 'uuid';
 
+/** helper: rudimentary UUID check so we only treat true DB ids as existing */
+const isUuid = (v: unknown) =>
+  typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v as string);
+
 export interface QuizQuestion {
   id?: string;
   text: string;
@@ -41,6 +45,20 @@ export const getUserQuizzes = async () => {
   return data ?? [];
 };
 
+//Flip the activation state of a quiz from false to true.
+export async function setQuizActivation(quizId: string, active: boolean) {
+  const { data, error } = await supabase
+    .from('quizzes')
+    .update({ is_code_active: active, updated_at: new Date().toISOString() })
+    .eq('id', quizId)
+    .select('id, is_code_active')
+    .single();
+
+  if (error) {
+    throw error;
+  }
+  return data;
+}
 
 // Get a specific quiz with its questions
 export const getQuizWithQuestions = async (quizId: string) => {
@@ -338,122 +356,125 @@ const generateOptions = (topic: string, difficulty: string): any[] => {
 };
 
 // Save a quiz with its questions
-export const saveQuiz = async (quiz: Quiz, questions: QuizQuestion[]) => {
-  try {
-    // Get the current user's ID
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      throw new Error("User must be authenticated to save a quiz");
-    }
-    
-    console.log('Saving quiz:', quiz.title, 'with', questions.length, 'questions');
-    
-    // Generate invitation code if the quiz is published
-    const invitationCode = quiz.published ? generateInvitationCode() : null;
-    
-    // Insert/update the quiz
-    const { data: savedQuiz, error: quizError } = await supabase
-      .from('quizzes')
-      .upsert({
-        id: quiz.id || undefined,
-        title: quiz.title,
-        description: quiz.description,
-        published: quiz.published,
-        invitation_code: invitationCode,
-        user_id: user.id,
-        // persist quiz duration seconds when provided
-        quiz_duration_seconds: quiz.quiz_duration_seconds ?? null,
-      })
-      .select()
-      .single();
-      
-    if (quizError) {
-      console.error("Error saving quiz:", quizError);
-      throw quizError;
-    }
-    
-    console.log('Quiz saved successfully:', savedQuiz.id);
-    
-    if (questions && questions.length > 0) {
-      // Prepare questions with proper UUIDs.  Ownership will be enforced via RLS based on quiz_id.
-      // Helper to test UUID format. We consider a simple regex match: 8-4-4-4-12 hex characters.
-      const isValidUuid = (val: string) => {
-        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val);
-      };
+export async function saveQuiz(
+  quizMeta: {
+    id: string;
+    title: string;
+    description?: string | null;
+    published?: boolean;
+    quiz_duration_seconds?: number | null;
+    is_code_active?: boolean;
+  },
+  questions: Array<{
+    id?: string; // may be local temp id for new questions
+    text: string;
+    type: 'mcq' | 'true_false' | 'short_answer' | string;
+    order_position: number;
+    options: any[] | null;
+    correct_answer: any;
+  }>
+) {
+  if (!quizMeta?.id) throw new Error('Missing quiz id');
 
-      const questionsToSave = questions.map((question, index) => {
-        // Normalize the question type from UI to database values.  The DB accepts
-        // `multiple_choice`, `true_false`, and `essay` (for short/essay questions).
-        // Incoming UI types may be "mcq" (for multiple choice) or other strings,
-        // so convert accordingly before inserting.  Unsupported types fall back to
-        // their original value.
-        let dbType: string = question.type;
-        if (dbType === 'mcq') {
-          dbType = 'multiple_choice';
-        } else if (dbType === 'essay' || dbType === 'short') {
-          // Treat both essay and short-answer UI types as the same DB type
-          dbType = 'essay';
-        }
-
-        // Determine a valid UUID for the question.  Existing questions should have
-        // valid UUIDs; new questions created in the editor may have placeholder
-        // identifiers like "new-0".  If the provided id is not a valid UUID,
-        // generate a fresh one.  Using our own UUID here ensures that the
-        // database does not reject invalid UUIDs on insert.
-        let finalId: string;
-        if (question.id && typeof question.id === 'string' && isValidUuid(question.id)) {
-          finalId = question.id;
-        } else {
-          finalId = uuidv4();
-        }
-
-        return {
-          id: finalId,
-          quiz_id: savedQuiz.id,
-          text: question.text,
-          type: dbType,
-          options: question.options,
-          correct_answer: question.correct_answer,
-          order_position: question.order_position !== undefined ? question.order_position : index,
-        };
-      });
-
-      console.log('Saving questions:', questionsToSave.length);
-
-      // Delete existing questions for this quiz first (in case of update)
-      // Use match on quiz_id to avoid deep generic instantiation. RLS ensures only
-      // questions belonging to this user's quiz are visible for deletion.
-      const { error: deleteError } = await supabase
-        .from('quiz_questions')
-        .delete()
-        .match({ quiz_id: savedQuiz.id });
-
-      if (deleteError) {
-        console.error('Error deleting existing questions:', deleteError);
-      }
-
-      // Insert new questions
-      const { data: savedQuestions, error: questionsError } = await supabase
-        .from('quiz_questions')
-        .insert(questionsToSave)
-        .select();
-
-      if (questionsError) {
-        console.error('Error saving questions:', questionsError);
-        throw questionsError;
-      }
-
-      console.log('Questions saved successfully:', savedQuestions?.length);
-      return { ...savedQuiz, questions: savedQuestions };
-    }
-    
-    return savedQuiz;
-  } catch (error) {
-    console.error('Error in saveQuiz:', error);
-    throw error;
+  // 1) update quiz metadata
+  const updatePayload: Record<string, any> = {
+    title: quizMeta.title,
+    description: quizMeta.description ?? null,
+    published: quizMeta.published ?? true,
+    updated_at: new Date().toISOString(),
+  };
+  if (quizMeta.quiz_duration_seconds !== undefined) {
+    updatePayload.quiz_duration_seconds = quizMeta.quiz_duration_seconds ?? null;
   }
-};
+  if (quizMeta.is_code_active !== undefined) {
+    updatePayload.is_code_active = !!quizMeta.is_code_active;
+  }
+  const { error: quizErr } = await supabase
+    .from('quizzes')
+    .update(updatePayload)
+    .eq('id', quizMeta.id);
+  if (quizErr) throw quizErr;
+
+  // 2) fetch existing DB ids to compute deletions
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('quiz_questions')
+    .select('id')
+    .eq('quiz_id', quizMeta.id);
+  if (existingErr) throw existingErr;
+
+  const existingIds = new Set((existingRows ?? []).map((r: any) => r.id));
+  const incomingDbIds = new Set(
+    (questions ?? [])
+      .map((q) => (isUuid(q.id) ? (q.id as string) : null))
+      .filter(Boolean) as string[]
+  );
+  const toDelete = [...existingIds].filter((id) => !incomingDbIds.has(id));
+
+  // 3) normalize rows for DB, split into "existing" (with uuid) and "new" (without uuid)
+  const normalize = (q: any) => {
+    // keep DB values consistent
+    let dbType = q.type;
+    if (dbType === 'multiple_choice') dbType = 'mcq';
+    const allowed = ['mcq', 'true_false', 'short_answer'];
+    if (!allowed.includes(dbType)) dbType = 'mcq';
+
+    let options = q.options;
+    let correct = q.correct_answer;
+
+    if (dbType === 'mcq') {
+      options = Array.isArray(options) ? options : [];
+      // correct stays as the chosen string
+    } else if (dbType === 'true_false') {
+      options = null;
+      correct = typeof correct === 'string' ? correct.toLowerCase() === 'true' : !!correct;
+    } else {
+      options = null; // short_answer
+      // correct stays as string
+    }
+
+    const base: any = {
+      quiz_id: quizMeta.id,
+      text: q.text ?? '',
+      type: dbType,
+      order_position: q.order_position ?? 0,
+      options,
+      correct_answer: correct,
+    };
+    if (isUuid(q.id)) base.id = q.id; // include id only for real DB rows
+    return base;
+  };
+
+  const normalized = (questions ?? []).map(normalize);
+  const existingUpserts = normalized.filter((r: any) => !!r.id);
+  const newInserts = normalized.filter((r: any) => !r.id);
+
+  // 4) upsert existing rows
+  if (existingUpserts.length > 0) {
+    const { error: upsertErr } = await supabase
+      .from('quiz_questions')
+      .upsert(existingUpserts, { onConflict: 'id' });
+    if (upsertErr) throw upsertErr;
+  }
+
+  // 5) insert new rows (omit id so DB generates)
+  if (newInserts.length > 0) {
+    const { error: insertErr } = await supabase
+      .from('quiz_questions')
+      .insert(newInserts);
+    if (insertErr) throw insertErr;
+  }
+
+  // 6) delete removed rows (only DB ids)
+  if (toDelete.length > 0) {
+    const { error: delErr } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .in('id', toDelete);
+    if (delErr) throw delErr;
+  }
+
+  return { id: quizMeta.id };
+}
 
 // Publish a quiz
 export const publishQuiz = async (quizId: string) => {
