@@ -89,6 +89,283 @@ export const getQuizWithQuestions = async (quizId: string) => {
   return { ...quiz, questions };
 };
 
+// Fetch the list of sections (class_sections) that are linked to the given quiz via quiz_sections.
+// Each returned row contains the section id and its code. If no sections exist, an empty array is returned.
+export const getQuizEligibleSections = async (quizId: string) => {
+  if (!quizId) throw new Error('Missing quiz id');
+  // Fetch section ids for this quiz
+  const { data: qs, error: qsErr } = await supabase
+    .from('quiz_sections')
+    .select('section_id')
+    .eq('quiz_id', quizId);
+  if (qsErr) throw qsErr;
+  const sectionIds = (qs ?? []).map((row: any) => row.section_id);
+  if (!sectionIds.length) return [];
+  // Fetch the section codes
+  const { data: sections, error: sectErr } = await supabase
+    .from('class_sections')
+    .select('id, code')
+    .in('id', sectionIds)
+    .order('code', { ascending: true });
+  if (sectErr) throw sectErr;
+  return sections ?? [];
+};
+
+// Compute aggregated analytics for a quiz. Optionally filter by a specific section id.
+// Returns averageScore (as a percentage from 0–100), the number of students who completed the quiz
+// (i.e. rows in analytics_student_performance), the total number of students who attempted at least one
+// question (unique student_name_norm in quiz_responses), and the hardest question with its text,
+// correct rate and average time (if data is available).
+export const getQuizAnalytics = async (quizId: string, sectionId?: string) => {
+  if (!quizId) throw new Error('Missing quiz id');
+  // 1) Fetch all performance rows for this quiz (optionally filtered by section)
+  const perfQuery = supabase
+    .from('analytics_student_performance')
+    .select('id, score, completion_time_seconds, student_name_norm, created_at, attempt_no, section_id')
+    .eq('quiz_id', quizId);
+  const { data: perfData, error: perfErr } = sectionId
+    ? await perfQuery.eq('section_id', sectionId)
+    : await perfQuery;
+  if (perfErr) throw perfErr;
+  const performances = perfData ?? [];
+
+  // 2) Determine number of questions in this quiz
+  const { data: qrows, error: qerr } = await supabase
+    .from('quiz_questions')
+    .select('id')
+    .eq('quiz_id', quizId);
+  if (qerr) throw qerr;
+  const totalQuestions = (qrows ?? []).length || 1;
+
+  // 3) Compute average score as a percentage
+  let averageScore = 0;
+  if (performances.length > 0) {
+    const sumPercent = performances.reduce((acc: number, row: any) => {
+      const rawScore = typeof row.score === 'number' ? row.score : Number(row.score);
+      const pct = totalQuestions > 0 ? (rawScore * 100) / totalQuestions : 0;
+      return acc + pct;
+    }, 0);
+    averageScore = sumPercent / performances.length;
+  }
+
+  // 4) Students completed = count of performance rows
+  const studentsCompleted = performances.length;
+
+  // 5) Compute total students who attempted (distinct student_name_norm from quiz_responses)
+  // 5) Compute total students who attempted (distinct student_name_norm)
+  const baseResp = (supabase as any) // cast to bypass missing table in generated types
+    .from('quiz_responses')
+    .select('student_name_norm, section_id')
+    .eq('quiz_id', quizId);
+
+  const { data: respData, error: respErr } = sectionId
+    ? await baseResp.eq('section_id', sectionId)
+    : await baseResp;
+  if (respErr) throw respErr;
+
+  const studentsSet = new Set<string>();
+  (respData ?? []).forEach((row: any) => {
+    if (row.student_name_norm) studentsSet.add(row.student_name_norm as string);
+  });
+  const totalStudents = studentsSet.size;
+
+  // 6) Determine hardest question using aggregated table
+  let hardest:
+    | { id: string; correctRate: number; avgTimeSeconds: number; text?: string }
+    | null = null;
+
+  const { data: qperfData, error: qperfErr } = await (supabase as any)
+    .from('analytics_question_performance')
+    .select('question_id, correct_count, incorrect_count, avg_time_seconds')
+    .eq('quiz_id', quizId);
+  if (qperfErr) throw qperfErr;
+
+  (qperfData ?? []).forEach((row: any) => {
+    const correct = typeof row.correct_count === 'number'
+      ? row.correct_count : Number(row.correct_count ?? 0);
+    const incorrect = typeof row.incorrect_count === 'number'
+      ? row.incorrect_count : Number(row.incorrect_count ?? 0);
+    const denom = correct + incorrect;
+    const rate = denom > 0 ? correct / denom : 0;
+    const avgTime = row.avg_time_seconds != null ? Number(row.avg_time_seconds) : 0;
+
+    if (!hardest) {
+      hardest = { id: row.question_id, correctRate: rate, avgTimeSeconds: avgTime };
+    } else if (rate < hardest.correctRate || (rate === hardest.correctRate && avgTime > hardest.avgTimeSeconds)) {
+      hardest = { id: row.question_id, correctRate: rate, avgTimeSeconds: avgTime };
+    }
+  });
+
+  // Fetch question text for hardest question
+  if (hardest) {
+    const { data: qData, error: qTextErr } = await supabase
+      .from('quiz_questions')
+      .select('id, text')
+      .eq('id', hardest.id)
+      .maybeSingle();
+    if (!qTextErr && qData) {
+      hardest.text = qData.text;
+    }
+  }
+
+  return {
+    averageScore,
+    studentsCompleted,
+    totalStudents,
+    hardestQuestion: hardest ? { id: hardest.id, text: hardest.text || '', correctRate: hardest.correctRate, avgTimeSeconds: hardest.avgTimeSeconds } : undefined,
+  };
+};
+
+// Fetch performance list for students taking a quiz. Optionally filter by section id.
+// Returns an array of objects containing performance id (student_perf id), student name, percent score, raw score,
+// completion time (ISO string), timeSpent (formatted), attempt number and section id.
+export const getStudentPerformanceList = async (quizId: string, sectionId?: string) => {
+  if (!quizId) throw new Error('Missing quiz id');
+  // Fetch all performance rows for this quiz and optional section
+  const perfQuery = supabase
+    .from('analytics_student_performance')
+    .select('id, student_name, score, completion_time_seconds, created_at, attempt_no, section_id')
+    .eq('quiz_id', quizId)
+    .order('created_at', { ascending: false });
+  const { data: perfData, error: perfErr } = sectionId
+    ? await perfQuery.eq('section_id', sectionId)
+    : await perfQuery;
+  if (perfErr) throw perfErr;
+  const performances = perfData ?? [];
+  // Determine number of questions to compute percent
+  const { data: qrows, error: qerr } = await supabase
+    .from('quiz_questions')
+    .select('id')
+    .eq('quiz_id', quizId);
+  if (qerr) throw qerr;
+  const totalQuestions = (qrows ?? []).length || 1;
+  return performances.map((row: any) => {
+    const rawScore = typeof row.score === 'number' ? row.score : Number(row.score);
+    const pct = totalQuestions > 0 ? (rawScore * 100) / totalQuestions : 0;
+    const secs = row.completion_time_seconds != null ? Number(row.completion_time_seconds) : 0;
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    const timeSpent = `${mins}m ${remSecs.toString().padStart(2, '0')}s`;
+    return {
+      id: row.id,
+      student_name: row.student_name,
+      score: Math.round(pct),
+      rawScore: rawScore,
+      completedAt: row.created_at,
+      timeSpent: timeSpent,
+      attempt_no: row.attempt_no,
+      section_id: row.section_id,
+    };
+  });
+};
+
+// Fetch detailed responses for a given student performance id. This returns a list of questions with
+// their text, the student's answer, the correct answer, whether it was correct, and time spent.
+export const getStudentPerformanceDetails = async (studentPerfId: string) => {
+  if (!studentPerfId) throw new Error('Missing student performance id');
+  // Fetch all quiz responses for this performance
+  const { data: responses, error: respErr } = await (supabase as any)
+    .from('quiz_responses')
+    .select('question_id, selected_option, text_answer, is_correct, time_spent_seconds')
+    .eq('student_perf_id', studentPerfId);
+  if (respErr) throw respErr;
+  const respRows = responses ?? [];
+  if (respRows.length === 0) return [];
+
+  // Gather unique question ids
+  // Gather unique question ids (ensure string[] for .in(...))
+  const qIds: string[] = Array.from(
+    new Set(
+      (respRows as any[]).map((row) => String(row.question_id))
+    )
+  );
+
+  // Fetch question details
+  const { data: qData, error: qErr } = await supabase
+    .from('quiz_questions')
+    .select('id, text, type, options, correct_answer')
+    .in('id', qIds);
+  if (qErr) throw qErr;
+  const qMap: Record<string, any> = {};
+  (qData ?? []).forEach((q: any) => {
+    qMap[q.id] = q;
+  });
+  // Helper to extract option text
+  const getOptionText = (options: any, index: number | null) => {
+    if (!options || index == null || index < 0) return null;
+    // options may be array of strings or array of objects with text field
+    const arr = Array.isArray(options) ? options : [];
+    const item = arr[index];
+    if (!item) return null;
+    return typeof item === 'string' ? item : (item.text ?? String(item));
+  };
+  return respRows.map((resp: any) => {
+    const q = qMap[resp.question_id];
+    if (!q) {
+      return {
+        questionId: resp.question_id,
+        questionText: 'Unknown question',
+        correctAnswer: null,
+        studentAnswer: null,
+        isCorrect: resp.is_correct,
+        timeSpent: '0m 00s',
+      };
+    }
+    // Determine correct answer text
+    let correctDisplay: any = null;
+    if (q.type === 'multiple_choice' || q.type === 'mcq') {
+      const ca = q.correct_answer;
+      let idx: number | null = null;
+      if (typeof ca === 'number') idx = ca;
+      else if (typeof ca === 'string') {
+        if (/^\d+$/.test(ca)) idx = parseInt(ca, 10);
+        else if (/^[A-Za-z]$/.test(ca)) idx = ca.toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
+      }
+      const optTxt = getOptionText(q.options, idx ?? null);
+      correctDisplay = optTxt ?? (typeof ca === 'string' ? ca : String(ca));
+    } else if (q.type === 'true_false' || q.type === 'true_false') {
+      const ca = q.correct_answer;
+      if (ca === true || ca === 'true') correctDisplay = 'True';
+      else if (ca === false || ca === 'false') correctDisplay = 'False';
+      else correctDisplay = String(ca ?? '');
+    } else {
+      correctDisplay = q.correct_answer;
+    }
+    // Determine student answer text
+    let studentDisplay: any = null;
+    if (q.type === 'multiple_choice' || q.type === 'mcq') {
+      const sa = resp.selected_option;
+      let idx: number | null = null;
+      if (typeof sa === 'number') idx = sa;
+      else if (typeof sa === 'string') {
+        if (/^\d+$/.test(sa)) idx = parseInt(sa, 10);
+        else if (/^[A-Za-z]$/.test(sa)) idx = sa.toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
+      }
+      const optTxt = getOptionText(q.options, idx ?? null);
+      studentDisplay = optTxt ?? (typeof sa === 'string' ? sa : String(sa));
+    } else if (q.type === 'true_false' || q.type === 'true_false') {
+      const sa = resp.selected_option;
+      if (sa === true || sa === 'true') studentDisplay = 'True';
+      else if (sa === false || sa === 'false') studentDisplay = 'False';
+      else studentDisplay = String(sa ?? '');
+    } else {
+      studentDisplay = resp.text_answer ?? '';
+    }
+    const secs = resp.time_spent_seconds != null ? Number(resp.time_spent_seconds) : 0;
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    const timeSpent = `${mins}m ${rem.toString().padStart(2, '0')}s`;
+    return {
+      questionId: q.id,
+      questionText: q.text,
+      correctAnswer: correctDisplay,
+      studentAnswer: studentDisplay,
+      isCorrect: resp.is_correct,
+      timeSpent: timeSpent,
+    };
+  });
+};
+
 // Delete a quiz and its associated questions
 export const deleteQuiz = async (quizId: string) => {
   if (!quizId) throw new Error('Missing quiz id');
@@ -498,4 +775,178 @@ export const publishQuiz = async (quizId: string) => {
 // Generate a random invitation code
 export const generateInvitationCode = () => {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
+};
+
+// -----------------------------------------------------------------------------
+// Additional helpers for managing class sections on quizzes
+//
+// Many pages need to display or edit which class sections can take a quiz. The
+// `quiz_sections` join table associates a quiz with zero or more `class_sections`
+// via foreign keys. To avoid leaking raw join rows into components, the
+// following helpers expose a higher-level API:
+//   - `listAllClassSectionCodes()` fetches all section codes (e.g. "IT-32").
+//   - `getQuizSectionCodes(quizId)` returns only the codes currently linked to
+//     a specific quiz.
+//   - `updateQuizSectionsByCodes(quizId, codes)` overwrites the quiz's
+//     membership to exactly the provided codes (creating missing links and
+//     removing stale ones).
+//   - `getUserQuizzesWithSections()` returns the user's published quizzes with
+//     a `section_codes: string[]` field so dashboards can display the target
+//     sections.
+//   - `getQuizWithSections(quizId)` returns a single quiz along with its
+//     associated section codes.
+
+export interface QuizWithSections extends Quiz {
+  /** Codes of class_sections allowed to take this quiz, e.g. ["IT-32", "CS-21"]. */
+  section_codes: string[];
+}
+
+/**
+ * List all class sections (just id + code). Sorted ascending by code. Useful
+ * when presenting a selection list (e.g. in quiz editor). If no sections exist,
+ * returns an empty array.
+ */
+export const listAllClassSectionCodes = async (): Promise<{ id: string; code: string }[]> => {
+  const { data, error } = await supabase
+    .from('class_sections')
+    .select('id, code')
+    .order('code', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({ id: r.id, code: String(r.code) }));
+};
+
+/**
+ * Fetch the section codes currently linked to a quiz. Supabase row-level
+ * security ensures the caller has access to the quiz; if not, this will
+ * return an empty array. Undefined codes are filtered out.
+ */
+export const getQuizSectionCodes = async (quizId: string): Promise<string[]> => {
+  if (!quizId) return [];
+  // Get the list of section_ids for this quiz
+  const { data: linkRows, error: linkErr } = await supabase
+    .from('quiz_sections')
+    .select('section_id')
+    .eq('quiz_id', quizId);
+  if (linkErr) throw linkErr;
+  const sectionIds = (linkRows || []).map((r: any) => r.section_id);
+  if (sectionIds.length === 0) return [];
+  // Fetch the codes for those ids
+  const { data: sections, error: csErr } = await supabase
+    .from('class_sections')
+    .select('id, code')
+    .in('id', sectionIds);
+  if (csErr) throw csErr;
+  return (sections || [])
+    .map((s: any) => String(s.code))
+    .filter((c) => !!c);
+};
+
+/**
+ * Overwrite the quiz's associated sections to exactly these codes. Any
+ * previously linked sections not listed will be removed, and missing
+ * associations will be created. Codes that don't exist in the database
+ * are ignored. Operates in two phases: look up codes -> ids, then
+ * compute diff between existing and new IDs, performing inserts/deletes.
+ */
+export const updateQuizSectionsByCodes = async (
+  quizId: string,
+  codes: string[]
+): Promise<void> => {
+  const uniqueCodes = Array.from(new Set((codes || []).map((c) => String(c))));
+  // Look up the ids for the provided codes
+  const { data: allSections, error: lookupErr } = await supabase
+    .from('class_sections')
+    .select('id, code')
+    .in('code', uniqueCodes);
+  if (lookupErr) throw lookupErr;
+  const codeToId = new Map<string, string>();
+  (allSections || []).forEach((r: any) => codeToId.set(String(r.code), r.id));
+  const newIds: string[] = uniqueCodes
+    .map((c) => codeToId.get(c))
+    .filter((id): id is string => !!id);
+  // Fetch existing associations
+  const { data: existingRows, error: existErr } = await supabase
+    .from('quiz_sections')
+    .select('section_id')
+    .eq('quiz_id', quizId);
+  if (existErr) throw existErr;
+  const existingIds = new Set((existingRows || []).map((r: any) => r.section_id));
+  // Determine which ids to add and remove
+  const toAdd = newIds.filter((id) => !existingIds.has(id));
+  const toRemove = Array.from(existingIds).filter((id) => !newIds.includes(id));
+  // Perform deletions first
+  if (toRemove.length > 0) {
+    const { error: delErr } = await supabase
+      .from('quiz_sections')
+      .delete()
+      .eq('quiz_id', quizId)
+      .in('section_id', toRemove);
+    if (delErr) throw delErr;
+  }
+  // Perform inserts
+  if (toAdd.length > 0) {
+    const rows = toAdd.map((section_id) => ({ quiz_id: quizId, section_id }));
+    const { error: insErr } = await supabase.from('quiz_sections').insert(rows);
+    if (insErr) throw insErr;
+  }
+};
+
+/**
+ * Fetch the current user's published quizzes and attach the associated
+ * section codes for each quiz. This lets dashboards show which sections
+ * each quiz targets. The underlying query uses the `quiz_sections` and
+ * `class_sections` tables; it filters on `published` just like
+ * `getUserQuizzes`, so soft-deleted quizzes are excluded.
+ */
+export const getUserQuizzesWithSections = async (): Promise<QuizWithSections[]> => {
+  // Ensure user is authenticated
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) throw new Error('Not authenticated');
+  // Fetch quizzes with nested join to quiz_sections -> class_sections
+  const { data, error } = await supabase
+    .from('quizzes')
+    .select(
+      `*, quiz_sections( section_id, class_sections!inner( code ) )`
+    )
+    .eq('user_id', auth.user.id)
+    .eq('published', true)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((quiz: any) => {
+    const sections = quiz.quiz_sections || [];
+    const codes = sections
+      .map((qs: any) => qs.class_sections?.code)
+      .filter((c: any) => !!c);
+    // Remove the nested join from the returned object to avoid exposing
+    // implementation details to components
+    delete quiz.quiz_sections;
+    return { ...(quiz as Quiz), section_codes: codes } as QuizWithSections;
+  });
+};
+
+/**
+ * Fetch a single quiz and include its associated section codes. Returns
+ * `null` if the quiz does not exist or the user lacks access. This helper
+ * is useful when editing a quiz so that the editor can pre-populate the
+ * selected sections.
+ */
+export const getQuizWithSections = async (quizId: string): Promise<QuizWithSections | null> => {
+  if (!quizId) return null;
+  const { data, error } = await supabase
+    .from('quizzes')
+    .select(
+      `*, quiz_sections( section_id, class_sections!inner( code ) )`
+    )
+    .eq('id', quizId)
+    .single();
+  if (error) {
+    // If there is no data, supabase returns error code PGRST116; ignore and return null
+    if (error.code === 'PGRST116') return null;
+    throw error;
+  }
+  const codes = (data.quiz_sections || [])
+    .map((qs: any) => qs.class_sections?.code)
+    .filter((c: any) => !!c);
+  delete data.quiz_sections;
+  return { ...(data as Quiz), section_codes: codes } as QuizWithSections;
 };

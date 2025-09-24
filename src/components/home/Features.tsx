@@ -56,12 +56,12 @@ const FeatureCard = ({ feature, index }: { feature: typeof features[0]; index: n
       whileInView={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: index * 0.1 }}
       viewport={{ once: true, margin: "-100px" }}
-      className="glass-card p-6"
+      className="p-6 glass-card"
     >
       <div className="flex items-center space-x-4">
         <div className="flex-shrink-0">
-          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-            <feature.icon className="h-6 w-6 text-primary" />
+          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
+            <feature.icon className="w-6 h-6 text-primary" />
           </div>
         </div>
         <div>
@@ -75,15 +75,15 @@ const FeatureCard = ({ feature, index }: { feature: typeof features[0]; index: n
 
 const Features = () => {
   return (
-    <div id="features" className="py-24 relative">
+    <div id="features" className="relative py-24">
       {/* Background Elements */}
-      <div className="absolute inset-0 -z-10 overflow-hidden">
+      <div className="absolute inset-0 overflow-hidden -z-10">
         <div className="absolute top-1/2 left-0 -translate-x-1/2 w-[500px] h-[500px] rounded-full bg-primary/5 blur-3xl" />
         <div className="absolute bottom-0 right-0 translate-x-1/4 translate-y-1/4 w-[500px] h-[500px] rounded-full bg-accent/5 blur-3xl" />
       </div>
 
       <div className="container-content">
-        <div className="text-center max-w-3xl mx-auto mb-16">
+        <div className="max-w-3xl mx-auto mb-16 text-center">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -98,7 +98,7 @@ const Features = () => {
           </motion.div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, index) => (
             <FeatureCard key={feature.name} feature={feature} index={index} />
           ))}
@@ -111,21 +111,15 @@ const Features = () => {
           viewport={{ once: true }}
           className="mt-16 text-center"
         >
-          <div className="glass-card max-w-3xl mx-auto p-8">
-            <Users className="h-12 w-12 text-primary mx-auto mb-4" />
+          <div className="max-w-3xl p-8 mx-auto glass-card">
+            <Users className="w-12 h-12 mx-auto mb-4 text-primary" />
             <h3 className="text-2xl font-medium">Ready to transform your teaching?</h3>
             <p className="mt-4 text-muted-foreground">
               Join thousands of professors using LearnVerse to create engaging assessments
               and personalized learning experiences for their students.
             </p>
             <div className="mt-6">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-full shadow-sm text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
-              >
-                Start Free Trial
-              </motion.button>
+          
             </div>
           </div>
         </motion.div>

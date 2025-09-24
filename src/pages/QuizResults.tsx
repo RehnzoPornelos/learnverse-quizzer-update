@@ -4,27 +4,41 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from "sonner";
 import Navbar from '@/components/layout/Navbar';
-import { getQuizWithQuestions } from '@/services/quizService';
+import {
+  getQuizWithQuestions,
+  getQuizEligibleSections,
+  getQuizAnalytics,
+  getStudentPerformanceList,
+  getStudentPerformanceDetails,
+} from '@/services/quizService';
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, ArrowLeft, Download, LineChart, UserRound } from "lucide-react";
 import { Progress } from '@/components/ui/progress';
+import { Label } from "@/components/ui/label";
 
 const QuizResults = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [quiz, setQuiz] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  
-  // Mock student results data
-  const [studentResults] = useState([
-    { id: '1', name: 'Emma Johnson', score: 92, completedAt: '2025-04-05T14:32:00Z', timeSpent: '8m 42s' },
-    { id: '2', name: 'Liam Smith', score: 78, completedAt: '2025-04-05T15:45:00Z', timeSpent: '12m 15s' },
-    { id: '3', name: 'Olivia Brown', score: 85, completedAt: '2025-04-06T09:20:00Z', timeSpent: '10m 30s' },
-    { id: '4', name: 'Noah Garcia', score: 67, completedAt: '2025-04-06T11:10:00Z', timeSpent: '14m 05s' },
-    { id: '5', name: 'Ava Miller', score: 95, completedAt: '2025-04-06T16:25:00Z', timeSpent: '9m 18s' },
-  ]);
+  // Sections linked to this quiz (for filtering)
+  const [sections, setSections] = useState<Array<{ id: string; code: string }>>([]);
+  const [selectedSectionId, setSelectedSectionId] = useState<string>('');
+  // Aggregated statistics for this quiz and selected section
+  const [stats, setStats] = useState<{
+    averageScore: number;
+    studentsCompleted: number;
+    totalStudents: number;
+    hardestQuestion?: { id: string; text: string; correctRate: number; avgTimeSeconds: number };
+  }>({ averageScore: 0, studentsCompleted: 0, totalStudents: 0 });
+  // Student performance list for this quiz and selected section
+  const [studentPerformances, setStudentPerformances] = useState<any[]>([]);
+  // State for student detail modal
+  const [detailsOpen, setDetailsOpen] = useState<boolean>(false);
+  const [detailRows, setDetailRows] = useState<any[]>([]);
+  const [detailStudentName, setDetailStudentName] = useState<string>('');
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -45,13 +59,65 @@ const QuizResults = () => {
     fetchQuiz();
   }, [id]);
 
+  // Once the quiz is loaded, fetch its eligible sections
+  useEffect(() => {
+    const loadSections = async () => {
+      if (!quiz) return;
+      try {
+        const sects = await getQuizEligibleSections(quiz.id);
+        setSections(sects);
+      } catch (error) {
+        console.error('Error fetching sections for quiz:', error);
+        toast.error('Failed to load sections');
+      }
+    };
+    loadSections();
+  }, [quiz]);
+
+  // Fetch analytics and performance list whenever quiz or section selection changes
+  useEffect(() => {
+    const loadAnalytics = async () => {
+      if (!quiz) return;
+      try {
+        const analytics = await getQuizAnalytics(quiz.id, selectedSectionId || undefined);
+        setStats(analytics);
+        const perfList = await getStudentPerformanceList(quiz.id, selectedSectionId || undefined);
+        setStudentPerformances(perfList);
+      } catch (error) {
+        console.error('Error loading analytics:', error);
+        toast.error('Failed to load quiz analytics');
+      }
+    };
+    loadAnalytics();
+  }, [quiz, selectedSectionId]);
+
+  // Handler to change section filter
+  const handleSectionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedSectionId(e.target.value);
+  };
+
+  // Handler to view student details
+  const handleViewDetails = async (student: any) => {
+    try {
+      const details = await getStudentPerformanceDetails(student.id);
+      setDetailStudentName(student.student_name);
+      setDetailRows(details);
+      setDetailsOpen(true);
+    } catch (error) {
+      console.error('Error fetching student details:', error);
+      toast.error('Failed to load student details');
+    }
+  };
+
   const handleBackClick = () => {
     navigate('/dashboard');
   };
 
-  const calculateAverageScore = () => {
-    if (!studentResults.length) return 0;
-    return Math.round(studentResults.reduce((acc, student) => acc + student.score, 0) / studentResults.length);
+  // Compute hardest question display index (1-based) using quiz.questions
+  const hardestQuestionIndex = () => {
+    if (!quiz || !stats.hardestQuestion || !quiz.questions) return null;
+    const idx = quiz.questions.findIndex((q: any) => q.id === stats.hardestQuestion?.id);
+    return idx >= 0 ? idx + 1 : null;
   };
 
   return (
@@ -87,6 +153,21 @@ const QuizResults = () => {
                   </Button>
                 </div>
               </div>
+              {/* Section filter dropdown */}
+              <div className="mt-4">
+                <Label htmlFor="sectionSelect" className="mr-2">Section:</Label>
+                <select
+                  id="sectionSelect"
+                  value={selectedSectionId}
+                  onChange={handleSectionChange}
+                  className="p-2 border rounded-md bg-background text-foreground"
+                >
+                  <option value="">All Sections</option>
+                  {sections.map((sect) => (
+                    <option key={sect.id} value={sect.id}>{sect.code}</option>
+                  ))}
+                </select>
+              </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card>
@@ -95,8 +176,10 @@ const QuizResults = () => {
                     <LineChart className="w-4 h-4 text-muted-foreground" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">{calculateAverageScore()}%</div>
-                    <Progress value={calculateAverageScore()} className="h-2 mt-2" />
+                    <div className="text-2xl font-bold">
+                      {stats.averageScore ? Math.round(stats.averageScore) : 0}%
+                    </div>
+                    <Progress value={stats.averageScore} className="h-2 mt-2" />
                   </CardContent>
                 </Card>
                 
@@ -106,9 +189,9 @@ const QuizResults = () => {
                     <UserRound className="w-4 h-4 text-muted-foreground" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">{studentResults.length}</div>
+                    <div className="text-2xl font-bold">{stats.studentsCompleted}</div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Out of 25 total students
+                      Out of {stats.totalStudents} total students
                     </p>
                   </CardContent>
                 </Card>
@@ -119,9 +202,13 @@ const QuizResults = () => {
                     <LineChart className="w-4 h-4 text-muted-foreground" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-sm font-medium truncate">Question #2</div>
+                    <div className="text-sm font-medium truncate">
+                      {stats.hardestQuestion ? (
+                        hardestQuestionIndex() !== null ? `Question #${hardestQuestionIndex()}` : stats.hardestQuestion.text
+                      ) : 'N/A'}
+                    </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      45% correct answer rate
+                      {stats.hardestQuestion ? `${Math.round(stats.hardestQuestion.correctRate * 100)}% correct answer rate` : 'No data'}
                     </p>
                   </CardContent>
                 </Card>
@@ -147,28 +234,67 @@ const QuizResults = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {studentResults.map((student) => (
-                        <TableRow key={student.id}>
-                          <TableCell className="font-medium">{student.name}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span className={student.score >= 75 ? "text-green-600" : "text-amber-600"}>
-                                {student.score}%
-                              </span>
-                              <Progress value={student.score} className="w-16 h-2" />
-                            </div>
-                          </TableCell>
-                          <TableCell>{new Date(student.completedAt).toLocaleString()}</TableCell>
-                          <TableCell>{student.timeSpent}</TableCell>
-                          <TableCell className="text-right">
-                            <Button variant="ghost" size="sm">View Details</Button>
+                      {studentPerformances.length > 0 ? (
+                        studentPerformances.map((student) => (
+                          <TableRow key={student.id}>
+                            <TableCell className="font-medium">{student.student_name}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <span className={student.score >= 75 ? 'text-green-600' : 'text-amber-600'}>
+                                  {student.score}%
+                                </span>
+                                <Progress value={student.score} className="w-16 h-2" />
+                              </div>
+                            </TableCell>
+                            <TableCell>{new Date(student.completedAt).toLocaleString()}</TableCell>
+                            <TableCell>{student.timeSpent}</TableCell>
+                            <TableCell className="text-right">
+                              <Button variant="ghost" size="sm" onClick={() => handleViewDetails(student)}>View Details</Button>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center py-4">
+                            No performance data found
                           </TableCell>
                         </TableRow>
-                      ))}
+                      )}
                     </TableBody>
                   </Table>
                 </CardContent>
               </Card>
+
+              {/* Student details modal */}
+              {detailsOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                  <div className="bg-card rounded-lg shadow-lg p-6 max-w-2xl w-full">
+                    <h3 className="text-lg font-bold mb-4">Details for {detailStudentName}</h3>
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {detailRows.length > 0 ? (
+                        detailRows.map((item: any, idx: number) => (
+                          <div key={idx} className="border rounded-lg p-4">
+                            <h4 className="font-semibold mb-1">{item.questionText}</h4>
+                            <p className="text-sm">
+                              Your Answer:{' '}
+                              <span className={item.isCorrect ? 'text-green-600' : 'text-red-600'}>
+                                {item.studentAnswer || 'No answer'}
+                              </span>
+                            </p>
+                            <p className="text-sm">Correct Answer: {item.correctAnswer}</p>
+                            <p className="text-sm">Time Spent: {item.timeSpent}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No details available.</p>
+                      )}
+                    </div>
+                    <div className="mt-4 flex justify-end">
+                      <Button onClick={() => setDetailsOpen(false)}>Close</Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-center py-16">

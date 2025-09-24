@@ -6,12 +6,14 @@ import re
 import requests
 import logging
 import time
+import difflib
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Body
 
 from dotenv import load_dotenv
 from utils import extract_text_from_file
@@ -24,8 +26,9 @@ load_dotenv()
 
 # ---- Groq ----
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# You set this default; fallbacks are below.
 GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "4096"))
+GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "6000"))
 
 # Soft local budgets (so we can proactively switch)
 GROQ_RPM = int(os.getenv("GROQ_RPM", "30"))        # requests per minute
@@ -37,8 +40,8 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY is missing. Check backend/.env.")
 
 FALLBACK_MODELS = [
-    "llama-3.3-70b-versatile",                         # primary (kept first)
-    "meta-llama/llama-4-scout-17b-16e-instruct",       # strong instruction-following
+    "llama-3.3-70b-versatile",                         # strong generalist
+    "meta-llama/llama-4-scout-17b-16e-instruct",       # instruction-following
     "gemma2-9b-it",                                    # reliable JSON
     "llama-3.1-8b-instant",                            # fast/cheap
     "deepseek-r1-distill-llama-70b",                   # powerful; emits <think>
@@ -52,13 +55,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     raise ValueError("Supabase env missing: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env")
 
-# Option A: supabase-py v2
 from supabase import create_client, Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# Example helper
 def db_health():
-    # light call just to verify creds/URL
     return supabase.table("pg_stat_activity").select("datname").limit(1).execute()
 
 # ---------- App / CORS ----------
@@ -179,62 +179,40 @@ async def disconnect(sid):
 
 # ---------- Quiz generation helpers ----------
 def generate_prompt(text: str, mcq_count: int, sa_count: int, tf_count: int) -> str:
-    """
-    Richer wording for questions/answers; avoids one-word choices and 'All of the above'.
-    """
     total = mcq_count + sa_count + tf_count
     return f"""
-From the following learning material, generate a quiz with a total of {total} questions:
+You are generating a quiz STRICTLY from the supplied learning material.
 
-- {mcq_count} Multiple Choice Questions (exactly 4 choices and one correct).
-- {sa_count} Short Answer Questions.
-- {tf_count} True/False Questions.
+Return ONLY a JSON ARRAY (no code fences, no keys outside the array, no comments), with EXACTLY {total} items:
+- First, {mcq_count} objects with "type":"mcq"
+- Then, {sa_count} objects with "type":"short_answer"
+- Then, {tf_count} objects with "type":"true_false"
 
-WRITING REQUIREMENTS (important):
-- Do NOT focus on just one topic inside the learning material, broaden the range and make sure each topic is used.
-- Make questions clear and informative, about 10-15 words (avoid telegraphic phrasing).
-- MCQ choices must be *informative statements*, each 4-7 words, mutually exclusive and plausible.
-- NEVER use generic choices like "All of the above", "None of the above", or "Both A and B".
-- The MCQ "answer" must be the full text of the correct choice (not a letter).
-- Short-answer "answer" should be 1–2 sentences (5-10 words), specific and faithful to the material.
-- True/False "answer" should be the JSON boolean true or false.
-- Everything must be grounded in the supplied material; avoid hallucinations.
+Schema per item:
+- type: "mcq" | "short_answer" | "true_false"
+- question: string (10–20 words, clear and grounded in the material)
+- For "mcq": choices: array of EXACTLY 4 strings (each 4–9 words, mutually exclusive, no “All/None of the above”); answer: string that EXACTLY matches one of the 4 choices.
+- For "short_answer": answer: string (1–2 sentences, 5–25 words)
+- For "true_false": answer: boolean true or false (must be a JSON boolean, not a string)
 
-Return ONLY a JSON array in this exact schema (no explanations, no code fences):
-
-[
-  {{
-    "type": "mcq",
-    "question": "…",
-    "choices": ["…", "…", "…", "…"],
-    "answer": "…"   // must exactly match one of the choices
-  }},
-  {{
-    "type": "short_answer",
-    "question": "…",
-    "answer": "…"   // 1–2 sentences
-  }},
-  {{
-    "type": "true_false",
-    "question": "…",
-    "answer": true  // or false
-  }}
-]
+Hard rules:
+- Use ONLY information present in the provided material.
+- Do NOT include any text before or after the JSON array.
+- Do NOT include code fences like ``` or any <think> tags.
+- Ensure EXACT counts. If you produce more than {total}, only the first {total} will be used; if fewer, your response will be rejected.
 
 Learning Material:
-\"\"\"
-{text}
-\"\"\"
+\"\"\"{text}\"\"\"
 """.strip()
 
-def truncate_text(text: str, max_chars: int = 20000) -> str:
-    return text[:max_chars]
+def truncate_text(text: str, max_chars: int = 12000) -> str:
+    return text[:max_chars] if len(text) > max_chars else text
 
 # ---- Groq helpers ----
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_TIMEOUT_S = 75  # a bit higher to avoid slow-network timeouts
+GROQ_TIMEOUT_S = 75
 
-def _post_to_groq(model: str, prompt: str, max_tokens: int = GROQ_MAX_TOKENS) -> requests.Response:
+def _post_to_groq(model: str, prompt: str, max_tokens: int) -> requests.Response:
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -242,38 +220,36 @@ def _post_to_groq(model: str, prompt: str, max_tokens: int = GROQ_MAX_TOKENS) ->
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # slightly higher temperature for richer wording, still stable
-        "temperature": 0.45,
+        "temperature": 0.1,
+        "top_p": 1.0,
         "max_tokens": max_tokens,
-        "stop": ["```", "<think>"],
+        "stop": ["```", "<think>", "</think>"],
     }
     return requests.post(GROQ_ENDPOINT, headers=headers, json=data, timeout=GROQ_TIMEOUT_S)
 
-# ---------- Simple in-memory rate limiter ----------
+# ---------- Simple in-memory rate limiter + model cooldowns ----------
 class RateLimiter:
     """
-    Tracks per-minute and per-day budgets for requests and tokens.
-    Not perfect (process memory only), but good enough to proactively avoid 429s.
+    Global soft budgets to avoid hammering the API.
     """
     def __init__(self, rpm:int, rpd:int, tpm:int, tpd:int):
         self.rpm_limit = rpm
         self.rpd_limit = rpd
         self.tpm_limit = tpm
         self.tpd_limit = tpd
-
         self._minute_epoch = self._now_minute()
         self._day_epoch = self._now_day()
-
         self.rpm_used = 0
         self.tpm_used = 0
         self.rpd_used = 0
         self.tpd_used = 0
+        # Model cooldowns: model -> unix timestamp
+        self.model_cooldown_until: Dict[str, float] = {}
 
     def _now_minute(self) -> int:
         return int(time.time() // 60)
 
     def _now_day(self) -> int:
-        # days since epoch
         return int(time.time() // 86400)
 
     def _maybe_roll_windows(self):
@@ -288,10 +264,14 @@ class RateLimiter:
             self.rpd_used = 0
             self.tpd_used = 0
 
+    def is_model_on_cooldown(self, model: str) -> bool:
+        until = self.model_cooldown_until.get(model, 0)
+        return until and time.time() < until
+
+    def set_cooldown(self, model: str, seconds: float):
+        self.model_cooldown_until[model] = max(self.model_cooldown_until.get(model, 0), time.time() + seconds)
+
     def can_afford(self, req_tokens_est:int = 0) -> Tuple[bool, str]:
-        """
-        Returns (ok, reason_if_not_ok)
-        """
         self._maybe_roll_windows()
         if self.rpm_used + 1 > self.rpm_limit:
             return False, "rpm_exhausted"
@@ -307,30 +287,28 @@ class RateLimiter:
         self._maybe_roll_windows()
         self.rpm_used += 1
         self.rpd_used += 1
-        # Reserve estimated tokens up front (conservative), then adjust after response
         self.tpm_used += req_tokens_est
         self.tpd_used += req_tokens_est
 
     def adjust_after_response(self, est_reserved:int, actual_total_tokens:int):
         """
-        Adjust token counters to the actual usage.
+        Adjust token counters to the actual usage; allow negative delta.
         """
         self._maybe_roll_windows()
         delta = actual_total_tokens - est_reserved
-        self.tpm_used += max(0, delta)
-        self.tpd_used += max(0, delta)
+        # allow reducing the reservation if actual < estimate
+        self.tpm_used = max(0, self.tpm_used + delta)
+        self.tpd_used = max(0, self.tpd_used + delta)
 
 limiter = RateLimiter(GROQ_RPM, GROQ_RPD, GROQ_TPM, GROQ_TPD)
 
-def _estimate_tokens_for_request(prompt:str, max_tokens:int) -> int:
-    # very rough: ~4 chars per token
+def _estimate_tokens_for_request(prompt:str, out_tokens_cap:int) -> int:
+    # ~4 chars/token; be less pessimistic (50% of cap) to reduce over-reserving
     in_tokens = max(1, len(prompt) // 4)
-    # pessimistic: assume we might use up to 70% of max_tokens
-    out_tokens = max(1, int(max_tokens * 0.7))
+    out_tokens = max(1, int(out_tokens_cap * 0.5))
     return in_tokens + out_tokens
 
 def _parse_usage_total_tokens(resp_json: Dict[str, Any]) -> Optional[int]:
-    # OpenAI-style usage object. Groq generally returns this too.
     try:
         usage = resp_json.get("usage") or {}
         total = usage.get("total_tokens")
@@ -341,65 +319,73 @@ def _parse_usage_total_tokens(resp_json: Dict[str, Any]) -> Optional[int]:
     return None
 
 def _model_list_preference() -> List[str]:
-    # Ensure the primary model is first, then the rest (without duplicates)
-    ordered = []
-    seen = set()
+    ordered, seen = [], set()
     for m in [GROQ_MODEL] + FALLBACK_MODELS:
         if m not in seen:
-            ordered.append(m)
-            seen.add(m)
+            ordered.append(m); seen.add(m)
     return ordered
 
-def choose_model(prompt: str, max_tokens: int) -> str:
+def choose_model(prompt: str, out_tokens_cap: int) -> Optional[str]:
     """
-    Pick the first model we can afford under our local budgets.
-    If the primary would exceed RPM/TPM/RPD/TPD, try fallbacks.
+    Pick the first model we can afford and that's not on cooldown.
     """
-    est = _estimate_tokens_for_request(prompt, max_tokens)
+    est = _estimate_tokens_for_request(prompt, out_tokens_cap)
     for model in _model_list_preference():
+        if limiter.is_model_on_cooldown(model):
+            log.warning("Model %s is on cooldown; skipping.", model)
+            continue
         ok, reason = limiter.can_afford(est)
         if ok:
             return model
-        # If we can't afford with this estimate, try next model (same budgets, but we still switch
-        # so we can distribute load and maybe different responses are shorter).
-        # (If we want per-model budgets later, we can extend this.)
         log.warning("Local budget near/over limit (%s); trying fallback model.", reason)
-    # If nothing affordable, just return primary; the server may 429 and we'll handle it.
-    return GROQ_MODEL
+    return None  # none affordable right now
 
-def call_groq(prompt: str) -> str:
-    """
-    Calls Groq with proactive local budgeting, failover on 429/503, and
-    fallbacks for decommissioned/not-found models (400/404).
-    """
-    max_tokens = GROQ_MAX_TOKENS
-    estimate = _estimate_tokens_for_request(prompt, max_tokens)
+# Provider error helpers
+_QUOTA_HINTS = ("quota", "daily", "exceed", "exceeded", "limit", "insufficient", "tpm", "rpm", "tpd", "rpd", "rate")
+def _looks_like_quota_or_rate(err_json: Dict[str, Any]) -> Tuple[bool, str]:
+    msg = ""
+    try:
+        e = err_json.get("error") or {}
+        msg = (e.get("message") or "") + " " + (e.get("code") or "")
+        msg = msg.lower()
+    except Exception:
+        pass
+    hit = any(k in msg for k in _QUOTA_HINTS)
+    return hit, msg
 
-    # candidates to try in order (respecting budgets)
-    models_to_try = []
-    tried = set()
-    # first pick an affordable one
-    first = choose_model(prompt, max_tokens)
-    models_to_try.append(first)
-    tried.add(first)
-    # then other fallbacks
+def call_groq(prompt: str, max_tokens_override: Optional[int] = None) -> str:
+    """
+    Budget-aware call with optional small max_tokens for top-up.
+    - Releases unused reservations (fixes false TPM exhaustion).
+    - Skips models on cooldown and sets cooldowns on provider quota/rate errors.
+    """
+    out_cap = max_tokens_override if max_tokens_override is not None else GROQ_MAX_TOKENS
+    estimate = _estimate_tokens_for_request(prompt, out_cap)
+
+    models_to_try, tried = [], set()
+    first = choose_model(prompt, out_cap)
+    if first:
+        models_to_try.append(first); tried.add(first)
     for m in _model_list_preference():
         if m not in tried:
-            models_to_try.append(m)
-            tried.add(m)
+            models_to_try.append(m); tried.add(m)
+
+    if not models_to_try:
+        # Nothing affordable now; surface a clear error
+        raise RuntimeError("Local budgets exhausted; please retry shortly.")
 
     def parse_err(resp):
-        try:
-            return resp.json()
-        except Exception:
-            return {"error": resp.text}
+        try: return resp.json()
+        except Exception: return {"error": {"message": resp.text, "code": str(resp.status_code)}}
 
-    backoffs = [0.4, 0.8]  # quick retries on 429/503
-
+    backoffs = [0.3, 0.6]
     last_error = None
 
     for model in models_to_try:
-        # Reserve locally (to avoid stampeding). We’ll adjust after the response.
+        if limiter.is_model_on_cooldown(model):
+            log.warning("Model %s still on cooldown; skipping.", model)
+            continue
+
         can, reason = limiter.can_afford(estimate)
         if not can:
             log.warning("Skipping %s due to local budgets: %s", model, reason)
@@ -407,10 +393,10 @@ def call_groq(prompt: str) -> str:
 
         limiter.reserve(estimate)
         log.info("Calling Groq model=%s (reserved est=%d tokens)", model, estimate)
-        r = _post_to_groq(model, prompt, max_tokens=max_tokens)
+        r = _post_to_groq(model, prompt, max_tokens=out_cap)
         if r.status_code == 200:
             j = r.json()
-            used = _parse_usage_total_tokens(j) or estimate  # adjust if we have real usage
+            used = _parse_usage_total_tokens(j) or estimate
             limiter.adjust_after_response(estimate, used)
             out = j["choices"][0]["message"]["content"]
             log.info("Groq OK model=%s tokens_used=%s", model, used)
@@ -421,24 +407,34 @@ def call_groq(prompt: str) -> str:
         last_error = (r.status_code, err)
         log.error("[GROQ ERROR] model=%s %s %s", model, r.status_code, err)
 
-        code = str(err.get("error", {}).get("code", "")).lower()
-        msg  = str(err.get("error", {}).get("message", "")).lower()
+        # Always release reservation with a small usage (assume request tokens only) to avoid overhang
+        limiter.adjust_after_response(estimate, actual_total_tokens=max(1, len(prompt)//4))
 
-        # CASE A: model gone / wrong -> try next model immediately
-        if r.status_code in (400, 404) and (
-            "model_decommissioned" in code
-            or "model_not_found" in code
-            or "decommissioned" in msg
-        ):
-            log.warning("Model %s not available; trying next fallback.", model)
+        code_lower = ""
+        try:
+            code_lower = str(err.get("error", {}).get("code", "")).lower()
+        except Exception:
+            pass
+        msg_hit, msg_text = _looks_like_quota_or_rate(err)
+
+        # If the provider hints quota/rate, cooldown this model so next attempts try fallbacks.
+        if r.status_code in (429, 403) or msg_hit or any(k in code_lower for k in _QUOTA_HINTS):
+            # TPM/RPM -> short cooldown; Daily quota -> longer cooldown
+            if any(k in msg_text for k in ("tpm", "rpm", "rate")):
+                limiter.set_cooldown(model, seconds=60)        # 1 minute
+                log.warning("Cooldown set: %s for 60s due to rate/TPM.", model)
+            elif any(k in msg_text for k in ("daily", "tpd", "rpd", "quota", "insufficient", "exceed", "exceeded", "limit")):
+                limiter.set_cooldown(model, seconds=6*3600)    # 6 hours
+                log.warning("Cooldown set: %s for 6h due to daily/quota.", model)
+            # Try next model immediately
             continue
 
-        # CASE B: rate/quota/transient -> try quick retries, then next model
-        if r.status_code in (429, 503) or any(k in (code + " " + msg) for k in ["rate", "quota", "tpm", "tpd", "rpm", "rpd"]):
+        # Transient 5xx -> quick retries with same model, then next
+        if r.status_code in (500, 502, 503):
             for b in backoffs:
                 log.warning("Transient %s; retrying model=%s after %.1fs", r.status_code, model, b)
                 time.sleep(b)
-                r2 = _post_to_groq(model, prompt, max_tokens=max_tokens)
+                r2 = _post_to_groq(model, prompt, max_tokens=out_cap)
                 if r2.status_code == 200:
                     j2 = r2.json()
                     used2 = _parse_usage_total_tokens(j2) or estimate
@@ -449,18 +445,16 @@ def call_groq(prompt: str) -> str:
                 else:
                     err2 = parse_err(r2)
                     log.error("[GROQ RETRY ERROR] model=%s %s %s", model, r2.status_code, err2)
-            # move to next model
-            log.warning("Switching model after rate/quota/transient issue.")
+            log.warning("Switching model after transient issue.")
             continue
 
-        # Other error: try next model; if none succeed we’ll surface last error
+        # Other client errors: try next model
         log.warning("Unhandled error for model=%s; trying next model.", model)
 
-    # If we get here, all attempts failed
     status, err = last_error if last_error else (500, {"error": "Unknown Groq failure"})
     raise RuntimeError(f"Groq {status}: {err}")
 
-# Output sanitization and parsing
+# -------- Output sanitization & parsing --------
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_RE = re.compile(r"```(?:json)?(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -473,8 +467,7 @@ def _clean_model_output(text: str) -> str:
 
 def extract_json_array(text: str):
     text = _clean_model_output(text)
-    start = text.find("[")
-    end = text.rfind("]")
+    start = text.find("["); end = text.rfind("]")
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No valid JSON array found in output.")
     json_str = text[start : end + 1]
@@ -483,12 +476,193 @@ def extract_json_array(text: str):
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse JSON array: {e}")
 
+# -------- Normalization, repair & validation --------
+def _ascii_quotes(s: str) -> str:
+    return s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"\s+", " ", _ascii_quotes(s or "")).strip()
+
+def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    t = item.get("type")
+    if "question" in item and isinstance(item["question"], str):
+        item["question"] = _norm_text(item["question"])
+    if t == "mcq":
+        if isinstance(item.get("choices"), list):
+            item["choices"] = [_norm_text(c) if isinstance(c, str) else c for c in item["choices"]]
+        if isinstance(item.get("answer"), str):
+            item["answer"] = _norm_text(item["answer"])
+    elif t == "short_answer":
+        if isinstance(item.get("answer"), str):
+            item["answer"] = _norm_text(item["answer"])
+    elif t == "true_false":
+        ans = item.get("answer")
+        if isinstance(ans, str):
+            s = ans.strip().lower()
+            if s == "true": item["answer"] = True
+            elif s == "false": item["answer"] = False
+    return item
+
+def _normalize_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            out.append(_normalize_item(it))
+    return out
+
+def _answers_match(ans: str, choices: List[str]) -> bool:
+    a = _norm_text(ans)
+    for c in choices:
+        if _norm_text(c) == a:
+            return True
+    return False
+
+def _repair_mcq(item: Dict[str, Any]) -> Dict[str, Any]:
+    if item.get("type") != "mcq": return item
+    choices = item.get("choices")
+    ans = item.get("answer")
+    if not isinstance(choices, list):
+        return item
+    # Trim >4 choices preserving the correct answer
+    if len(choices) > 4:
+        norm_ans = _norm_text(ans) if isinstance(ans, str) else ans
+        new = []
+        for c in choices:
+            if isinstance(c, str) and _norm_text(c) == norm_ans:
+                new.append(c); break
+        for c in choices:
+            if len(new) >= 4: break
+            if c not in new and isinstance(c, str):
+                new.append(c)
+        item["choices"] = new[:4]
+    # Fuzzy-map answer to closest choice if not exact
+    if isinstance(item.get("answer"), str) and isinstance(item.get("choices"), list):
+        if not _answers_match(item["answer"], item["choices"]):
+            norm_ans = _norm_text(item["answer"])
+            norm_choices = [_norm_text(c) for c in item["choices"] if isinstance(c, str)]
+            if norm_choices:
+                match = difflib.get_close_matches(norm_ans, norm_choices, n=1, cutoff=0.6)
+                if match:
+                    for c in item["choices"]:
+                        if isinstance(c, str) and _norm_text(c) == match[0]:
+                            item["answer"] = c
+                            break
+    return item
+
+def _repair_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    fixed = []
+    for it in items:
+        if isinstance(it, dict) and it.get("type") == "mcq":
+            fixed.append(_repair_mcq(it))
+        else:
+            fixed.append(it)
+    return fixed
+
+def _is_valid_mcq(item: Dict[str, Any]) -> bool:
+    if item.get("type") != "mcq":
+        return False
+    q = item.get("question")
+    choices = item.get("choices")
+    ans = item.get("answer")
+    if not isinstance(q, str) or not isinstance(choices, list) or len(choices) != 4 or not isinstance(ans, str):
+        return False
+    if any(not isinstance(c, str) or len(_norm_text(c)) < 3 for c in choices):
+        return False
+    if not _answers_match(ans, choices):
+        return False
+    return True
+
+def _is_valid_short(item: Dict[str, Any]) -> bool:
+    return (
+        item.get("type") == "short_answer"
+        and isinstance(item.get("question"), str)
+        and isinstance(item.get("answer"), str)
+        and len(_norm_text(item.get("answer"))) > 0
+    )
+
+def _is_valid_tf(item: Dict[str, Any]) -> bool:
+    return (
+        item.get("type") == "true_false"
+        and isinstance(item.get("question"), str)
+        and isinstance(item.get("answer"), bool)
+    )
+
+def _filter_and_partition(items: List[Dict[str, Any]]):
+    items = _normalize_items(items)
+    items = _repair_items(items)
+    mcq, sa, tf = [], [], []
+    for it in items:
+        try:
+            t = it.get("type")
+            if t == "mcq" and _is_valid_mcq(it):
+                mcq.append(it)
+            elif t == "short_answer" and _is_valid_short(it):
+                sa.append(it)
+            elif t == "true_false" and _is_valid_tf(it):
+                tf.append(it)
+        except Exception:
+            continue
+    return mcq, sa, tf
+
+def _merge_trim_to_counts(mcq: List[Dict[str, Any]],
+                          sa: List[Dict[str, Any]],
+                          tf: List[Dict[str, Any]],
+                          need_mcq: int, need_sa: int, need_tf: int) -> List[Dict[str, Any]]:
+    return mcq[:need_mcq] + sa[:need_sa] + tf[:need_tf]
+
+def _counts_satisfied(mcq, sa, tf, need_mcq, need_sa, need_tf) -> bool:
+    return len(mcq) >= need_mcq and len(sa) >= need_sa and len(tf) >= need_tf
+
+def _estimate_topup_tokens(missing_mcq: int, missing_sa: int, missing_tf: int) -> int:
+    # Small caps so we don't trip TPM minute limits
+    return max(300, missing_mcq * 220 + missing_sa * 120 + missing_tf * 40)
+
+def _top_up_generation(base_text: str,
+                       have_mcq: int, have_sa: int, have_tf: int,
+                       need_mcq: int, need_sa: int, need_tf: int) -> List[Dict[str, Any]]:
+    missing_mcq = max(0, need_mcq - have_mcq)
+    missing_sa  = max(0, need_sa  - have_sa)
+    missing_tf  = max(0, need_tf  - have_tf)
+    if (missing_mcq + missing_sa + missing_tf) == 0:
+        return []
+    prompt2 = generate_prompt(base_text, missing_mcq, missing_sa, missing_tf)
+    small_cap = min(1200, _estimate_topup_tokens(missing_mcq, missing_sa, missing_tf))
+    raw2 = call_groq(prompt2, max_tokens_override=small_cap)
+    arr2 = extract_json_array(raw2)
+    mcq2, sa2, tf2 = _filter_and_partition(arr2)
+    return _merge_trim_to_counts(mcq2, sa2, tf2, missing_mcq, missing_sa, missing_tf)
+
+def _bool_from_text(txt: str) -> bool | None:
+    t = _clean_model_output((txt or "")).strip().lower()
+    # be robust if model emits anything else
+    if "true" in t and "false" not in t:
+        return True
+    if "false" in t and "true" not in t:
+        return False
+    if t.startswith("true"):  # just in case
+        return True
+    if t.startswith("false"):
+        return False
+    return None
+
+def _lexical_backup(student: str, reference: str) -> bool:
+    # very cheap fallback if model fails: token overlap OR fuzzy ratio
+    sa = _norm_text(student).lower()
+    ra = _norm_text(reference).lower()
+    if not sa or not ra:
+        return False
+    wa = set(re.findall(r"[a-z0-9]+", sa))
+    wb = set(re.findall(r"[a-z0-9]+", ra))
+    inter = len(wa & wb)
+    if inter >= 3 or (wb and inter >= max(2, int(0.5 * len(wb)))):
+        return True
+    return difflib.SequenceMatcher(None, sa, ra).ratio() >= 0.80
+
 # ---------- Routes ----------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# Support both with and without trailing slash
 @app.post("/generate-quiz")
 @app.post("/generate-quiz/", include_in_schema=False)
 async def generate_quiz(
@@ -496,7 +670,7 @@ async def generate_quiz(
     mcq_count: int = Form(3),
     sa_count: int = Form(3),
     tf_count: int = Form(4),
-):
+):   
     # Save temp upload
     suffix = Path(file.filename).suffix or ".pdf"
     temp_path = Path(f"temp_{uuid.uuid4()}{suffix}")
@@ -504,32 +678,121 @@ async def generate_quiz(
         f.write(await file.read())
 
     try:
-        # Extract & prepare prompt
+        # Extract & prepare prompt/input
         text = extract_text_from_file(str(temp_path))
         safe_text = truncate_text(text)
         prompt = generate_prompt(safe_text, mcq_count, sa_count, tf_count)
+        requested_total = mcq_count + sa_count + tf_count
 
-        # Call Groq
+        # 1) Primary generation
         try:
-            raw_output = call_groq(prompt)
+            raw_output = call_groq(prompt, max_tokens_override=GROQ_MAX_TOKENS)
         except Exception as e:
             log.error("Groq call failed: %s", e)
             return JSONResponse(content={"error": f"{e}"}, status_code=502)
 
-        if len(text) > 12000:
-            log.warning("Text was truncated to fit model limits.")
-
-        # Parse JSON
+        # 2) Strict parse
         try:
-            quiz_data = extract_json_array(raw_output)
+            arr = extract_json_array(raw_output)
+            if not isinstance(arr, list):
+                raise ValueError("Model did not return a JSON array.")
         except Exception as e:
             log.error("JSON parsing failed: %s\nRaw output:\n%s", e, raw_output)
             return JSONResponse(content={"error": "Failed to parse JSON from model output."}, status_code=500)
 
-        return JSONResponse(content=quiz_data)
+        # 3) Normalize/Repair/Validate and partition
+        mcq, sa, tf = _filter_and_partition(arr)
+
+        # 4) If under-produced, try ONE small top-up call for missing counts
+        if not _counts_satisfied(mcq, sa, tf, mcq_count, sa_count, tf_count):
+            try:
+                extras = _top_up_generation(
+                    base_text=safe_text,
+                    have_mcq=len(mcq), have_sa=len(sa), have_tf=len(tf),
+                    need_mcq=mcq_count, need_sa=sa_count, need_tf=tf_count
+                )
+                if extras:
+                    ex_mcq, ex_sa, ex_tf = _filter_and_partition(extras)
+                    mcq += ex_mcq; sa += ex_sa; tf += ex_tf
+            except Exception as e:
+                log.warning("Top-up generation failed: %s", e)
+
+        # 5) Final enforcement: trim to EXACT requested counts (order MCQ->SA->TF)
+        final_items = _merge_trim_to_counts(mcq, sa, tf, mcq_count, sa_count, tf_count)
+
+        # 6) If STILL short, fail loudly so the UI can retry or adjust counts
+        if len(final_items) != requested_total:
+            log.error(
+                "Final count mismatch. Have: %d (mcq=%d sa=%d tf=%d); need: %d",
+                len(final_items), len(mcq), len(sa), len(tf), requested_total
+            )
+            return JSONResponse(
+                content={"error": "Model returned fewer valid items than requested. Please retry or reduce counts."},
+                status_code=502
+            )
+
+        # ✅ Success — return ONLY the array
+        return JSONResponse(content=final_items)
 
     finally:
         try:
             temp_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+@app.post("/grade-short-answer")
+def grade_short_answer(payload: dict = Body(...)):
+    """
+    Body: { "question_id": "<uuid>", "student_answer": "<text>" }
+    Returns: { "is_correct": true|false }
+    """
+    qid = (payload or {}).get("question_id")
+    student = (payload or {}).get("student_answer") or ""
+    if not qid or not isinstance(student, str):
+        return JSONResponse({"is_correct": False, "error": "bad_request"}, status_code=400)
+
+    # 1) get reference answer (+ optional question text) from DB
+    try:
+        res = supabase.table("quiz_questions") \
+            .select("id,type,text,correct_answer") \
+            .eq("id", qid).maybe_single().execute()
+        row = (res.data if hasattr(res, "data") else res.get("data"))
+        row = row or {}
+    except Exception as e:
+        log.error("DB fetch failed: %s", e)
+        return JSONResponse({"is_correct": False, "error": "db_error"}, status_code=500)
+
+    ref = (row.get("correct_answer") or "").strip()
+    question_text = (row.get("text") or "").strip()
+    if not ref:
+        # if no reference, treat as ungradable -> false
+        return {"is_correct": False}
+
+    # 2) ask Groq; cap tokens to 3 to keep it tiny
+    prompt = f"""
+You are a strict grader for short-answer quizzes.
+
+Decide if the STUDENT answer expresses the **same essential meaning**
+as the REFERENCE answer for this QUESTION. Paraphrasing and synonyms are OK,
+but key facts must match and there must be no contradictions.
+
+Output **ONLY** the word TRUE or FALSE. No punctuation. No explanation.
+
+QUESTION: {question_text}
+REFERENCE: {ref}
+STUDENT: {student}
+
+Answer (ONLY TRUE or FALSE):
+""".strip()
+
+    try:
+        raw = call_groq(prompt, max_tokens_override=3)
+        val = _bool_from_text(raw)
+        if val is None:
+            # model replied weirdly — fall back to a cheap lexical check
+            val = _lexical_backup(student, ref)
+        return {"is_correct": bool(val)}
+    except Exception as e:
+        log.error("Groq grading failed: %s", e)
+        # last-ditch lexical fallback so grading still works
+        return {"is_correct": _lexical_backup(student, ref)}

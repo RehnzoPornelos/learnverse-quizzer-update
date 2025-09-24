@@ -28,8 +28,7 @@ const Navbar = () => {
   }, [location]);
 
   const navLinks = [
-    { name: 'Home', path: '/' },
-    { name: 'Features', path: '/#features' },
+    { name: 'Home', path: '/' },,
     { name: 'Professor', path: '/dashboard?role=professor' },
     { name: 'Analytics', path: '/analytics' },
   ];
@@ -44,12 +43,12 @@ const Navbar = () => {
       <div className="container-content">
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center space-x-2">
-            <BookOpen className="h-8 w-8 text-primary" />
+          <img src="/udm-logo.png" alt="Logo" className="w-8 h-8 text-primary" />
             <span className="text-xl font-medium">LearnVerse</span>
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-8">
+          <div className="items-center hidden space-x-8 md:flex">
             <div className="flex space-x-6">
               {navLinks.map((link) => (
                 <Link
@@ -64,7 +63,7 @@ const Navbar = () => {
                 </Link>
               ))}
             </div>
-            <div className="flex space-x-3 items-center">
+            <div className="flex items-center space-x-3">
               <ThemeToggle />
               {!loading && (
                 user ? (
@@ -84,13 +83,13 @@ const Navbar = () => {
           </div>
 
           {/* Mobile Menu Button */}
-          <div className="md:hidden flex items-center space-x-2">
+          <div className="flex items-center space-x-2 md:hidden">
             <ThemeToggle />
             <button
               className="p-2 rounded-md text-muted-foreground hover:text-foreground focus:outline-none"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             >
-              {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
           </div>
         </div>
@@ -104,7 +103,7 @@ const Navbar = () => {
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.3 }}
-            className="md:hidden bg-background shadow-lg border-t border-border"
+            className="border-t shadow-lg md:hidden bg-background border-border"
           >
             <div className="container py-4 space-y-4">
               <div className="flex flex-col space-y-3">
@@ -124,12 +123,12 @@ const Navbar = () => {
                 ))}
                 <Link
                   to="/join"
-                  className="px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-muted text-muted-foreground"
+                  className="px-3 py-2 text-sm font-medium transition-colors rounded-md hover:bg-muted text-muted-foreground"
                 >
                   Join a Quiz
                 </Link>
               </div>
-              <div className="flex flex-col space-y-2 pt-2 border-t border-border">
+              <div className="flex flex-col pt-2 space-y-2 border-t border-border">
                 {!loading && (
                   user ? (
                     <Link to="/account-settings" className="w-full">

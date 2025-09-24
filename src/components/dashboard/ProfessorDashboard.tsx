@@ -5,7 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { motion } from 'framer-motion';
 import { BookOpen, LineChart, PlusCircle, Edit, Eye, Trash2, ArrowUpRight } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
-import { getUserQuizzes, Quiz, deleteQuiz } from '@/services/quizService';
+// Use the enhanced service that includes section codes on quizzes. QuizWithSections
+// extends Quiz and adds a `section_codes` field.
+import {
+  getUserQuizzesWithSections,
+  type QuizWithSections,
+  deleteQuiz,
+} from '@/services/quizService';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -35,9 +41,79 @@ const ActivationBadge = ({ active }: { active?: boolean }) => (
   </span>
 );
 
+/** Wrap-friendly section chips with overflow “+N more”. */
+const SectionChips = ({ codes }: { codes: string[] }) => {
+  const MAX_INLINE = 4;
+  const all = Array.isArray(codes) ? codes : [];
+  if (all.length === 0) {
+    return (
+      <div className="text-sm">
+        <span className="text-muted-foreground">Sections</span>
+        <span className="ml-2">None</span>
+      </div>
+    );
+  }
+
+  const inline = all.slice(0, MAX_INLINE);
+  const overflow = all.slice(MAX_INLINE);
+
+  return (
+    <div className="text-sm">
+      <span className="text-muted-foreground">Sections</span>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {inline.map((code) => (
+          <span
+            key={code}
+            className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary"
+            title={code}
+          >
+            {code}
+          </span>
+        ))}
+
+        {overflow.length > 0 && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                className="text-xs px-2 py-0.5 rounded-full bg-muted text-foreground/80 hover:bg-muted/80 transition"
+                aria-label={`Show ${overflow.length} more sections`}
+              >
+                +{overflow.length} more
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="max-w-md">
+              <AlertDialogHeader>
+                <AlertDialogTitle>All Sections</AlertDialogTitle>
+                <AlertDialogDescription className="sr-only">
+                  Full list of class sections for this quiz
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="mt-2 max-h-56 overflow-auto">
+                <div className="flex flex-wrap gap-1.5">
+                  {all.map((code) => (
+                    <span
+                      key={code}
+                      className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary"
+                    >
+                      {code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <AlertDialogFooter className="mt-4">
+                <AlertDialogCancel>Close</AlertDialogCancel>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const ProfessorDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
-  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [quizzes, setQuizzes] = useState<QuizWithSections[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingQuizId, setDeletingQuizId] = useState<string | null>(null);
   const { user } = useAuth();
@@ -46,9 +122,9 @@ const ProfessorDashboard = () => {
   useEffect(() => {
     const fetchQuizzes = async () => {
       try {
-        const fetchedQuizzes = await getUserQuizzes();
+        const fetchedQuizzes = await getUserQuizzesWithSections();
         // Only include published quizzes on the dashboard.
-        setQuizzes(fetchedQuizzes.filter(q => q.published));
+        setQuizzes(fetchedQuizzes.filter((q) => q.published));
       } catch (error) {
         console.error('Error fetching quizzes:', error);
         toast.error('Failed to load quizzes');
@@ -292,6 +368,9 @@ const ProfessorDashboard = () => {
                           <span className="text-muted-foreground">Created</span>
                           <span>{new Date(quiz.created_at || '').toLocaleDateString()}</span>
                         </div>
+
+                        {/* Pretty, wrap-friendly chips with overflow */}
+                        <SectionChips codes={(quiz as any).section_codes || []} />
 
                         <div className="pt-3 flex gap-2">
                           <Button

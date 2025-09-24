@@ -1,3 +1,4 @@
+// src/pages/QuizEdit.tsx
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -8,6 +9,15 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Save, ArrowLeft } from "lucide-react";
 import TabPreviewContent from '@/components/quiz/TabPreviewContent';
 import { Switch } from '@/components/ui/switch';
+
+// ⬇️ sections service helpers
+import {
+  getQuizSectionCodes,
+  updateQuizSectionsByCodes,
+} from '@/services/quizService';
+
+// ⬇️ NEW: editor in controlled mode
+import ClassSectionsEditor from '@/components/quiz/ClassSectionsEditor';
 
 const QuizEdit = () => {
   const { id } = useParams<{ id: string }>();
@@ -21,6 +31,10 @@ const QuizEdit = () => {
   // Activation toggle state (LOCAL ONLY until Save)
   const [isCodeActive, setIsCodeActive] = useState<boolean>(false);
   const [activationDirty, setActivationDirty] = useState<boolean>(false);
+
+  // ⬇️ NEW: sections state owned by QuizEdit so we can save with the quiz
+  const [sectionCodes, setSectionCodes] = useState<string[]>([]);
+  const [loadingSections, setLoadingSections] = useState<boolean>(true);
 
   // Allow editing the quiz title locally
   const handleTitleChange = (e: any) => {
@@ -79,6 +93,25 @@ const QuizEdit = () => {
     fetchQuiz();
   }, [id]);
 
+  // ⬇️ Load current sections for this quiz into state (so we can save with main button)
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!id) return;
+      try {
+        setLoadingSections(true);
+        const picked = await getQuizSectionCodes(id);
+        if (!live) return;
+        setSectionCodes(picked);
+      } finally {
+        setLoadingSections(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
   const handleQuestionsUpdated = (updatedQuestions: any[]) => {
     setQuestions(updatedQuestions);
   };
@@ -88,14 +121,19 @@ const QuizEdit = () => {
 
     try {
       setSaving(true);
-      // normalize UI -> DB rows (keep DB types: 'mcq' | 'true_false' | 'short_answer')
+
+      // 1) Persist section links FIRST so they survive even if we later navigate
+      const quizId = quiz.id || id || '';
+      await updateQuizSectionsByCodes(quizId, sectionCodes);
+
+      // 2) Normalize questions and save quiz metadata
       const dbQuestions = questions.map((q: any, index: number) => {
         let dbType = q.type === 'multiple_choice' ? 'mcq' : q.type;
         const allowed = ['mcq', 'true_false', 'short_answer'];
         if (!allowed.includes(dbType)) dbType = 'mcq';
 
         const row: any = {
-          id: q.id || undefined,                 // may be a non-uuid temp id; saveQuiz filters this
+          id: q.id || undefined,
           text: q.question ?? '',
           type: dbType,
           order_position: index,
@@ -123,11 +161,11 @@ const QuizEdit = () => {
           description: quiz.description || '',
           published: quiz.published,
           quiz_duration_seconds: quizDurationSeconds ?? null,
-          // <-- persist activation together with other updates
           is_code_active: isCodeActive,
         },
         dbQuestions
       );
+
       toast.success('Quiz saved successfully');
       setActivationDirty(false);
       navigate('/dashboard');
@@ -170,7 +208,7 @@ const QuizEdit = () => {
                     <ArrowLeft className="mr-2 h-4 w-4" />
                     Back to Dashboard
                   </Button>
-                  <Button onClick={handleSaveQuiz} disabled={saving}>
+                  <Button onClick={handleSaveQuiz} disabled={saving || loadingSections}>
                     {saving ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -224,6 +262,14 @@ const QuizEdit = () => {
                   />
                 </div>
               </div>
+
+              {/* ⬇️ NEW: Class Sections editor in controlled mode (no internal Save button) */}
+              <ClassSectionsEditor
+                quizId={quiz?.id || id || ''}
+                value={sectionCodes}
+                onValueChange={setSectionCodes}
+                showSaveButton={false}
+              />
 
               <TabPreviewContent
                 quizTitle={quiz.title}

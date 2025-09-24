@@ -24,45 +24,50 @@ const Index = () => {
         <Features />
         
         {/* Footer */}
-        <footer className="bg-secondary/50 py-12">
+        <footer className="py-12 bg-secondary/50">
           <div className="container-content">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
               <div>
-                <h3 className="text-lg font-medium mb-4">LearnVerse</h3>
+                <h3 className="mb-4 text-lg font-medium">LearnVerse</h3>
                 <p className="text-sm text-muted-foreground">
-                  AI-powered quiz generation platform for professors to assess student learning.
+                  Advance Technology quiz generation platform for professors to assess student learning.
                 </p>
               </div>
               <div>
-                <h3 className="text-lg font-medium mb-4">Links</h3>
+                <h3 className="mb-4 text-lg font-medium">Developer</h3>
                 <ul className="space-y-2 text-sm">
                   <li>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                      About Us
+                    <a href="#" className="transition-colors text-muted-foreground hover:text-primary">
+                      Pornelos, Rehnzo
                     </a>
                   </li>
                   <li>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                      Features
+                    <a href="#" className="transition-colors text-muted-foreground hover:text-primary">
+                      Valerio, Mark Francis
                     </a>
                   </li>
                   <li>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                      Pricing
+                    <a href="#" className="transition-colors text-muted-foreground hover:text-primary">
+                      Estrada, Jamaine
                     </a>
                   </li>
                   <li>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                      Contact
+                    <a href="#" className="transition-colors text-muted-foreground hover:text-primary">
+                      Acuba, Matthew Blair
+                    </a>
+                  </li>
+                  <li>
+                    <a href="#" className="transition-colors text-muted-foreground hover:text-primary">
+                      Lim, Onsen Ronald
                     </a>
                   </li>
                 </ul>
               </div>
               <div>
-                <h3 className="text-lg font-medium mb-4">Contact</h3>
+                <h3 className="mb-4 text-lg font-medium">Contact</h3>
                 <ul className="space-y-2 text-sm">
                   <li className="text-muted-foreground">
-                    Email: hello@learnverse.io
+                    Email: mfvalerio0226@gmail.com
                   </li>
                   <li className="text-muted-foreground">
                     Phone: (123) 456-7890
@@ -70,7 +75,7 @@ const Index = () => {
                 </ul>
               </div>
             </div>
-            <div className="mt-12 pt-8 border-t border-border text-center text-sm text-muted-foreground">
+            <div className="pt-8 mt-12 text-sm text-center border-t border-border text-muted-foreground">
               <p>© {new Date().getFullYear()} LearnVerse. All rights reserved.</p>
             </div>
           </div>
