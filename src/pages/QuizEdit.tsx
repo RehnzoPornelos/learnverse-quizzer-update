@@ -1,4 +1,3 @@
-// src/pages/QuizEdit.tsx
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -6,7 +5,7 @@ import { toast } from "sonner";
 import Navbar from '@/components/layout/Navbar';
 import { getQuizWithQuestions, saveQuiz } from '@/services/quizService';
 import { Button } from "@/components/ui/button";
-import { Loader2, Save, ArrowLeft } from "lucide-react";
+import { Loader2, Save, ArrowLeft, Shuffle } from "lucide-react";
 import TabPreviewContent from '@/components/quiz/TabPreviewContent';
 import { Switch } from '@/components/ui/switch';
 
@@ -31,6 +30,10 @@ const QuizEdit = () => {
   // Activation toggle state (LOCAL ONLY until Save)
   const [isCodeActive, setIsCodeActive] = useState<boolean>(false);
   const [activationDirty, setActivationDirty] = useState<boolean>(false);
+
+  // ⬇️ NEW: Randomize questions toggle
+  const [isRumbled, setIsRumbled] = useState<boolean>(false);
+  const [rumbledDirty, setRumbledDirty] = useState<boolean>(false);
 
   // ⬇️ NEW: sections state owned by QuizEdit so we can save with the quiz
   const [sectionCodes, setSectionCodes] = useState<string[]>([]);
@@ -79,9 +82,11 @@ const QuizEdit = () => {
 
         setQuizDurationSeconds(quizData.quiz_duration_seconds ?? null);
 
-        // hydrate activation flag
+        // hydrate toggles
         setIsCodeActive(Boolean((quizData as any).is_code_active));
         setActivationDirty(false);
+        setIsRumbled(Boolean((quizData as { is_rumbled?: boolean }).is_rumbled));
+        setRumbledDirty(false);
       } catch (error) {
         console.error('Error fetching quiz:', error);
         toast.error('Failed to load quiz');
@@ -122,7 +127,7 @@ const QuizEdit = () => {
     try {
       setSaving(true);
 
-      // 1) Persist section links FIRST so they survive even if we later navigate
+      // 1) Persist section links FIRST
       const quizId = quiz.id || id || '';
       await updateQuizSectionsByCodes(quizId, sectionCodes);
 
@@ -162,12 +167,14 @@ const QuizEdit = () => {
           published: quiz.published,
           quiz_duration_seconds: quizDurationSeconds ?? null,
           is_code_active: isCodeActive,
+          is_rumbled: isRumbled,
         },
         dbQuestions
       );
 
       toast.success('Quiz saved successfully');
       setActivationDirty(false);
+      setRumbledDirty(false);
       navigate('/dashboard');
     } catch (error) {
       console.error('Error saving quiz:', error);
@@ -238,7 +245,7 @@ const QuizEdit = () => {
                 />
               </div>
 
-              {/* Activate quiz toggle (local until Save) */}
+              {/* Activation toggle (local until Save) */}
               <div className="flex items-center justify-between rounded-md border bg-background px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">Activation</p>
@@ -263,7 +270,59 @@ const QuizEdit = () => {
                 </div>
               </div>
 
-              {/* ⬇️ NEW: Class Sections editor in controlled mode (no internal Save button) */}
+              {/* Randomize questions toggle */}
+              <div className="flex items-center justify-between rounded-md border bg-background px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Shuffle className="h-4 w-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-medium">Randomize Questions</p>
+                    <p className="text-xs text-muted-foreground">
+                      Shuffle the order of questions per student when taking this quiz.
+                      {rumbledDirty && (
+                        <span className="ml-1 text-amber-600">— unsaved change</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs ${isRumbled ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    {isRumbled ? 'On' : 'Off'}
+                  </span>
+                  <Switch
+                    checked={isRumbled}
+                    onCheckedChange={(next: boolean) => {
+                      setIsRumbled(next);
+                      setRumbledDirty(true);
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Add Timer — moved under Randomize */}
+              <div className="flex items-center justify-between rounded-md border bg-background px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Add Timer</p>
+                  <p className="text-xs text-muted-foreground">Set a time limit for completing the quiz.</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    // display minutes; null means no timer
+                    value={Math.max(0, Math.floor((quizDurationSeconds ?? 0) / 60))}
+                    onChange={(e) => {
+                      const mins = Math.max(0, parseInt(e.target.value || '0', 10));
+                      setQuizDurationSeconds(mins > 0 ? mins * 60 : null);
+                    }}
+                    className="w-20 rounded-md border border-border bg-background px-2 py-1 text-right"
+                  />
+                  <span className="text-sm">minutes</span>
+                </div>
+              </div>
+
+              {/* ⬇️ Class Sections editor (controlled) */}
               <ClassSectionsEditor
                 quizId={quiz?.id || id || ''}
                 value={sectionCodes}
@@ -271,17 +330,16 @@ const QuizEdit = () => {
                 showSaveButton={false}
               />
 
-              <TabPreviewContent
-                quizTitle={quiz.title}
-                onBack={handleBackClick}
-                onPublish={handleSaveQuiz}
-                isPublishing={saving}
-                onQuestionsUpdated={handleQuestionsUpdated}
-                initialQuestions={questions}
-                initialDurationSeconds={quizDurationSeconds !== null ? quizDurationSeconds : undefined}
-                onDurationUpdated={(sec: number) => setQuizDurationSeconds(sec || null)}
-                hideHeaderActions
-              />
+             <TabPreviewContent
+              quizTitle={quiz.title}
+              onBack={handleBackClick}
+              onPublish={handleSaveQuiz}
+              isPublishing={saving}
+              onQuestionsUpdated={handleQuestionsUpdated}
+              initialQuestions={questions}
+              hideHeaderActions
+              hideSetupControls   // NEW: hides the bottom “Add Timer” + “Randomize” block
+            />
             </div>
           ) : (
             <div className="text-center py-16">

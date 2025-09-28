@@ -19,6 +19,7 @@ interface TabPreviewContentProps {
   initialDurationSeconds?: number;
   onDurationUpdated?: (seconds: number) => void;
   hideHeaderActions?: boolean;
+  hideSetupControls?: boolean; // hide Timer + Randomize block
 }
 
 const TabPreviewContent = ({
@@ -31,6 +32,7 @@ const TabPreviewContent = ({
   initialDurationSeconds,
   onDurationUpdated,
   hideHeaderActions = false,
+  hideSetupControls = false, // default
 }: TabPreviewContentProps) => {
   /** Questions shown to professor (never shuffled in Preview). */
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
@@ -257,61 +259,66 @@ const TabPreviewContent = ({
         )}
       </div>
 
-      <Separator />
+      {/* Hide this whole setup section (and its separators) when requested */}
+      {!hideSetupControls && (
+        <>
+          <Separator />
 
-      {/* Timer + Randomize preference (no shuffling here) */}
-      <div className="space-y-3">
-        <div className="flex items-start justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="quiz-timer" className="text-sm cursor-pointer">Add Timer</Label>
-            <p className="text-muted-foreground text-xs">Set a time limit for completing the quiz</p>
+          {/* Timer + Randomize preference (no shuffling here) */}
+          <div className="space-y-3">
+            <div className="flex items-start justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="quiz-timer" className="text-sm cursor-pointer">Add Timer</Label>
+                <p className="text-muted-foreground text-xs">Set a time limit for completing the quiz</p>
+              </div>
+              <Switch
+                id="quiz-timer"
+                checked={timerEnabled}
+                onCheckedChange={(val: boolean) => {
+                  setTimerEnabled(val);
+                  if (val && (durationMinutesStr === '0' || durationMinutesStr === '')) setDurationMinutesStr('');
+                }}
+              />
+            </div>
+
+            {timerEnabled && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  className="ui-input w-24"
+                  value={durationMinutesStr}
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+                    setDurationMinutesStr(cleaned);
+                  }}
+                  onBlur={() => {
+                    const cleaned = (durationMinutesStr || '').replace(/^0+(?=\d)/, '');
+                    setDurationMinutesStr(cleaned);
+                  }}
+                  placeholder="Minutes"
+                />
+                <span className="text-sm text-muted-foreground">minutes</span>
+              </div>
+            )}
+
+            <div className="flex items-start justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="quiz-randomize" className="text-sm cursor-pointer">Randomize Questions</Label>
+                <p className="text-muted-foreground text-xs">Preference only — preview order stays the same</p>
+              </div>
+              <Switch
+                id="quiz-randomize"
+                checked={randomizeEnabled}
+                onCheckedChange={handleRandomizeToggle}
+              />
+            </div>
           </div>
-          <Switch
-            id="quiz-timer"
-            checked={timerEnabled}
-            onCheckedChange={(val: boolean) => {
-              setTimerEnabled(val);
-              if (val && (durationMinutesStr === '0' || durationMinutesStr === '')) setDurationMinutesStr('');
-            }}
-          />
-        </div>
 
-        {timerEnabled && (
-          <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              className="ui-input w-24"
-              value={durationMinutesStr}
-              onChange={(e) => {
-                const cleaned = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
-                setDurationMinutesStr(cleaned);
-              }}
-              onBlur={() => {
-                const cleaned = (durationMinutesStr || '').replace(/^0+(?=\d)/, '');
-                setDurationMinutesStr(cleaned);
-              }}
-              placeholder="Minutes"
-            />
-            <span className="text-sm text-muted-foreground">minutes</span>
-          </div>
-        )}
-
-        <div className="flex items-start justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="quiz-randomize" className="text-sm cursor-pointer">Randomize Questions</Label>
-            <p className="text-muted-foreground text-xs">Preference only — preview order stays the same</p>
-          </div>
-          <Switch
-            id="quiz-randomize"
-            checked={randomizeEnabled}
-            onCheckedChange={handleRandomizeToggle}
-          />
-        </div>
-      </div>
-
-      <Separator />
+          <Separator />
+        </>
+      )}
 
       {/* Questions list (kept in the same order) */}
       <div ref={listRef} className="space-y-4 max-h-[500px] overflow-auto pr-2">

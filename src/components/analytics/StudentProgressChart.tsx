@@ -1,203 +1,217 @@
-
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
-import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
-import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
-interface StudentProgress {
-  id: string;
-  name: string;
-  progress: {
-    quiz: string;
-    score: number;
-  }[];
-  averageScore: number;
+interface QuizMeta { id: string; title: string; created_at?: string | null }
+interface StudentKPI {
+  id: string; name: string;
+  byQuiz: { quizId: string; quizTitle: string; pct: number; when?: string | null }[];
+  avgPct: number; participationRate: number; consistencyStd: number; improvementPct: number;
+  risk: "On Track" | "Needs Attention" | "At Risk";
 }
+interface ProgressChartPoint { name: string; [series: string]: number | string }
+interface Props { professorId: string | null; sectionId: string | null }
 
-interface ProgressChartData {
-  name: string;
-  [key: string]: string | number;
-}
+const StudentProgressChart = ({ professorId, sectionId }: Props) => {
+  const [isLoading, setIsLoading] = useState(true);
+  const [chartData, setChartData] = useState<ProgressChartPoint[]>([]);
+  const [students, setStudents] = useState<StudentKPI[]>([]);
 
-const StudentProgressChart = () => {
-  const [studentProgressData, setStudentProgressData] = useState<StudentProgress[]>([]);
-  const [progressChartData, setProgressChartData] = useState<ProgressChartData[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+  // allow query if either professor scope or a specific section is chosen
+  const canQuery = useMemo(() => !!professorId || !!sectionId, [professorId, sectionId]);
 
   useEffect(() => {
-    const fetchStudentData = async () => {
+    if (!canQuery) {
+      setIsLoading(false);
+      setStudents([]);
+      setChartData([]);
+      return;
+    }
+
+    const run = async () => {
       setIsLoading(true);
       try {
-        // Fetch quizzes from Supabase to use their titles
-        const { data: quizzes, error } = await supabase
-          .from('quizzes')
-          .select('id, title')
-          .order('created_at', { ascending: false })
-          .limit(5);
-          
-        if (error) {
-          console.error("Error fetching quizzes for student progress:", error);
-          // Use mock data if there's an error
-          setMockData();
+        // ──────────────────────────────────────────────────────────────────────
+        // 1) Pull student rows DIRECTLY from analytics_student_performance
+        //    with an inner join to quizzes (to scope by professor).
+        //    This avoids the empty .in('quiz_id', []) problem entirely.
+        // ──────────────────────────────────────────────────────────────────────
+        const base = supabase
+          .from("analytics_student_performance")
+          .select(
+            "quiz_id, section_id, student_name_norm, score, submitted_at, quizzes!inner(id, title, created_at, user_id)"
+          );
+
+        let spRes;
+        if (professorId) {
+          spRes = base.eq("quizzes.user_id", professorId);
+        } else {
+          // no professor context; still require the inner join to bring quiz meta
+          spRes = base;
+        }
+        if (sectionId) spRes = spRes.eq("section_id", sectionId);
+
+        const { data: spRows, error: spErr } = await spRes;
+        if (spErr) throw spErr;
+
+        if (!spRows || spRows.length === 0) {
+          setStudents([]);
+          setChartData([]);
+          setIsLoading(false);
           return;
         }
 
-        // If no quizzes are returned or empty array, use mock data
-        if (!quizzes || quizzes.length === 0) {
-          setMockData();
-          return;
+        // Build quiz meta from the join payload included in spRows
+        const quizById = new Map<string, QuizMeta>();
+        const quizIds: string[] = [];
+        for (const r of spRows as any[]) {
+          const q = r.quizzes as { id: string; title: string; created_at?: string | null };
+          if (q && !quizById.has(q.id)) {
+            quizById.set(q.id, { id: q.id, title: q.title, created_at: q.created_at ?? null });
+            quizIds.push(q.id);
+          }
         }
 
-        // Generate random student data based on real quiz titles
-        const studentNames = [
-          'Emma Johnson', 'Liam Smith', 'Olivia Brown', 
-          'Noah Garcia', 'Ava Miller'
-        ];
-        
-        const students: StudentProgress[] = studentNames.map((name, studentIndex) => {
-          const studentProgress = quizzes.map((quiz, quizIndex) => {
-            // Generate different patterns for different students
-            let baseScore;
-            switch (studentIndex) {
-              case 0: // Emma - starts good, stays good
-                baseScore = 85 + (quizIndex * 2);
-                break;
-              case 1: // Liam - steady improvement
-                baseScore = 72 + (quizIndex * 4);
-                break;
-              case 2: // Olivia - decreasing trend
-                baseScore = 95 - (quizIndex * 3);
-                break;
-              case 3: // Noah - significant improvement
-                baseScore = 65 + (quizIndex * 6);
-                break;
-              case 4: // Ava - fluctuating
-                baseScore = 85 + (quizIndex % 2 === 0 ? -5 : 5);
-                break;
-              default:
-                baseScore = 75;
-            }
-            return {
-              quiz: quiz.title,
-              score: Math.min(100, Math.max(0, baseScore))  // Ensure score is between 0-100
-            };
-          });
-          
-          // Calculate average
-          const avgScore = studentProgress.reduce((sum, p) => sum + p.score, 0) / studentProgress.length;
-          
+        // Sort quizzes chronologically for x-axis order
+        const quizzes = Array.from(quizById.values()).sort((a, b) => {
+          const ta = a.created_at ? Date.parse(a.created_at) : 0;
+          const tb = b.created_at ? Date.parse(b.created_at) : 0;
+          return ta - tb;
+        });
+
+        // ──────────────────────────────────────────────────────────────────────
+        // 2) Fetch total questions per quiz (for raw→% conversion)
+        // ──────────────────────────────────────────────────────────────────────
+        const { data: qqRows, error: qqErr } = await supabase
+          .from("quiz_questions")
+          .select("id, quiz_id")
+          .in("quiz_id", quizIds);
+        if (qqErr) throw qqErr;
+
+        const qCount = new Map<string, number>();
+        (qqRows ?? []).forEach((r: any) => {
+          qCount.set(r.quiz_id, (qCount.get(r.quiz_id) || 0) + 1);
+        });
+
+        // ──────────────────────────────────────────────────────────────────────
+        // 3) Normalize per-submission to percentages and group by student
+        // ──────────────────────────────────────────────────────────────────────
+        type Row = {
+          studentKey: string; name: string; quiz_id: string; pct: number; when?: string | null;
+        };
+
+        const rows: Row[] = (spRows as any[]).map((r) => {
+          const raw = Number(r.score);
+          const total = qCount.get(r.quiz_id) || 0;
+          const pct = total > 0 && raw <= total ? (raw / total) * 100 : raw;
+          const name = (r.student_name_norm || "Unknown") as string;
+
           return {
-            id: `student${studentIndex + 1}`,
+            studentKey: name, // stable key (use normalized name as unique id)
             name,
-            progress: studentProgress,
-            averageScore: avgScore
+            quiz_id: r.quiz_id as string,
+            pct,
+            when: r.submitted_at ?? (quizById.get(r.quiz_id)?.created_at ?? null),
           };
         });
-        
-        // Create progress chart data for line chart
-        const chartData = quizzes.map((quiz, index) => {
-          const dataPoint: ProgressChartData = { name: quiz.title };
-          students.forEach(student => {
-            const shortName = student.name.split(' ')[0]; // Use first name only
-            dataPoint[shortName] = student.progress[index]?.score || 0;
+
+        const byStudent = new Map<string, StudentKPI>();
+        for (const r of rows) {
+          if (!byStudent.has(r.studentKey)) {
+            byStudent.set(r.studentKey, {
+              id: r.studentKey,
+              name: r.name,
+              byQuiz: [],
+              avgPct: 0,
+              participationRate: 0,
+              consistencyStd: 0,
+              improvementPct: 0,
+              risk: "On Track",
+            });
+          }
+          byStudent.get(r.studentKey)!.byQuiz.push({
+            quizId: r.quiz_id,
+            quizTitle: quizById.get(r.quiz_id)?.title || "Quiz",
+            pct: r.pct,
+            when: r.when ?? null,
           });
-          return dataPoint;
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // 4) Compute KPIs
+        // ──────────────────────────────────────────────────────────────────────
+        const allQuizCount = quizzes.length || 1; // prevent /0
+
+        const kpis: StudentKPI[] = Array.from(byStudent.values()).map((s) => {
+          s.byQuiz.sort((a, b) => {
+            const ta = a.when ? Date.parse(a.when) : 0;
+            const tb = b.when ? Date.parse(b.when) : 0;
+            return ta - tb;
+          });
+
+          const vals = s.byQuiz.map((b) => b.pct);
+          const n = vals.length;
+          const avg = n ? vals.reduce((a, b) => a + b, 0) / n : 0;
+          const mean = avg;
+          const variance = n ? vals.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / n : 0;
+          const std = Math.sqrt(variance);
+
+          const first = n ? vals[0] : 0;
+          const last = n ? vals[n - 1] : 0;
+          const improvement = last - first;
+
+          const participation = (n / allQuizCount) * 100;
+
+          let risk: StudentKPI["risk"] = "On Track";
+          if (avg < 70 || (improvement <= -10 && participation >= 50)) risk = "At Risk";
+          else if ((avg >= 70 && avg < 80) || std > 12) risk = "Needs Attention";
+
+          return {
+            ...s,
+            avgPct: avg,
+            participationRate: participation,
+            consistencyStd: std,
+            improvementPct: improvement,
+            risk,
+          };
         });
 
-        setStudentProgressData(students);
-        setProgressChartData(chartData);
-      } catch (error) {
-        console.error("Error in student progress data fetching:", error);
-        setMockData();
+        // ──────────────────────────────────────────────────────────────────────
+        // 5) Build line chart for Top 5 by participation then avg
+        // ──────────────────────────────────────────────────────────────────────
+        const top5 = kpis
+          .slice()
+          .sort((a, b) => (b.participationRate !== a.participationRate
+            ? b.participationRate - a.participationRate
+            : b.avgPct - a.avgPct))
+          .slice(0, 5);
+
+        const points: ProgressChartPoint[] = quizzes.map((q) => {
+          const p: ProgressChartPoint = { name: q.title };
+          for (const s of top5) {
+            const label = s.name.split(" ")[0]; // first name as series label
+            const rec = s.byQuiz.find((b) => b.quizId === q.id);
+            p[label] = rec ? Number(rec.pct.toFixed(2)) : 0;
+          }
+          return p;
+        });
+
+        setStudents(kpis.slice().sort((a, b) => b.avgPct - a.avgPct));
+        setChartData(points);
+      } catch (e) {
+        console.error("StudentProgressChart error:", e);
+        setStudents([]);
+        setChartData([]);
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchStudentData();
-  }, []);
-
-  const setMockData = () => {
-    // Mock data if API call fails or returns empty
-    const mockStudentData = [
-      { 
-        id: 'student1',
-        name: 'Emma Johnson',
-        progress: [
-          { quiz: 'Quiz 1', score: 85 },
-          { quiz: 'Quiz 2', score: 78 },
-          { quiz: 'Quiz 3', score: 92 },
-          { quiz: 'Quiz 4', score: 88 },
-          { quiz: 'Quiz 5', score: 95 },
-        ],
-        averageScore: 87.6
-      },
-      { 
-        id: 'student2',
-        name: 'Liam Smith',
-        progress: [
-          { quiz: 'Quiz 1', score: 72 },
-          { quiz: 'Quiz 2', score: 75 },
-          { quiz: 'Quiz 3', score: 81 },
-          { quiz: 'Quiz 4', score: 85 },
-          { quiz: 'Quiz 5', score: 88 },
-        ],
-        averageScore: 80.2
-      },
-      { 
-        id: 'student3',
-        name: 'Olivia Brown',
-        progress: [
-          { quiz: 'Quiz 1', score: 95 },
-          { quiz: 'Quiz 2', score: 90 },
-          { quiz: 'Quiz 3', score: 85 },
-          { quiz: 'Quiz 4', score: 88 },
-          { quiz: 'Quiz 5', score: 82 },
-        ],
-        averageScore: 88.0
-      },
-      { 
-        id: 'student4',
-        name: 'Noah Garcia',
-        progress: [
-          { quiz: 'Quiz 1', score: 65 },
-          { quiz: 'Quiz 2', score: 72 },
-          { quiz: 'Quiz 3', score: 78 },
-          { quiz: 'Quiz 4', score: 85 },
-          { quiz: 'Quiz 5', score: 92 },
-        ],
-        averageScore: 78.4
-      },
-      { 
-        id: 'student5',
-        name: 'Ava Miller',
-        progress: [
-          { quiz: 'Quiz 1', score: 90 },
-          { quiz: 'Quiz 2', score: 85 },
-          { quiz: 'Quiz 3', score: 82 },
-          { quiz: 'Quiz 4', score: 78 },
-          { quiz: 'Quiz 5', score: 85 },
-        ],
-        averageScore: 84.0
-      },
-    ];
-    
-    // Transform data for line chart visualization
-    const mockProgressChartData = [
-      { name: 'Quiz 1', Emma: 85, Liam: 72, Olivia: 95, Noah: 65, Ava: 90 },
-      { name: 'Quiz 2', Emma: 78, Liam: 75, Olivia: 90, Noah: 72, Ava: 85 },
-      { name: 'Quiz 3', Emma: 92, Liam: 81, Olivia: 85, Noah: 78, Ava: 82 },
-      { name: 'Quiz 4', Emma: 88, Liam: 85, Olivia: 88, Noah: 85, Ava: 78 },
-      { name: 'Quiz 5', Emma: 95, Liam: 88, Olivia: 82, Noah: 92, Ava: 85 },
-    ];
-    
-    setStudentProgressData(mockStudentData);
-    setProgressChartData(mockProgressChartData);
-  };
+    run();
+  }, [canQuery, professorId, sectionId]);
 
   if (isLoading) {
     return (
@@ -229,92 +243,92 @@ const StudentProgressChart = () => {
       <Card>
         <CardHeader>
           <CardTitle>Student Progress Over Time</CardTitle>
-          <CardDescription>Score trends across multiple quizzes</CardDescription>
+          <CardDescription>Score trends across multiple quizzes (Top 5 by participation)</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="h-96">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={progressChartData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis domain={[0, 100]} />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="Emma" stroke="#8884d8" activeDot={{ r: 8 }} />
-                <Line type="monotone" dataKey="Liam" stroke="#82ca9d" />
-                <Line type="monotone" dataKey="Olivia" stroke="#ff7300" />
-                <Line type="monotone" dataKey="Noah" stroke="#0088FE" />
-                <Line type="monotone" dataKey="Ava" stroke="#FF8042" />
-              </LineChart>
-            </ResponsiveContainer>
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis domain={[0, 100]} />
+                  <Tooltip cursor={false} />
+                  <Legend />
+                  {Object.keys(chartData[0] ?? {})
+                    .filter((k) => k !== "name")
+                    .map((key) => (
+                      <Line key={key} type="monotone" dataKey={key} dot={false} strokeWidth={2} />
+                    ))}
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-96 items-center justify-center text-sm text-muted-foreground">
+                No student data in this scope.
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
-      
+
       <Card>
         <CardHeader>
           <CardTitle>Student Performance Details</CardTitle>
           <CardDescription>Individual student analytics</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Student</TableHead>
-                <TableHead>Average Score</TableHead>
-                <TableHead>Progress</TableHead>
-                <TableHead>Improvement</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {studentProgressData.map((student) => {
-                const firstScore = student.progress[0]?.score || 0;
-                const lastScore = student.progress[student.progress.length - 1]?.score || 0;
-                const improvement = lastScore - firstScore;
-                
-                return (
-                  <TableRow key={student.id}>
-                    <TableCell className="font-medium">{student.name}</TableCell>
-                    <TableCell>{student.averageScore.toFixed(1)}</TableCell>
-                    <TableCell className="w-64">
-                      <div className="flex items-center gap-2">
-                        <Progress value={student.averageScore} className="h-2" />
-                        <span className="text-sm">{student.averageScore.toFixed(1)}%</span>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Student</TableHead>
+                  <TableHead className="text-right">Avg Score</TableHead>
+                  <TableHead className="text-right">Participation</TableHead>
+                  <TableHead className="text-right">Consistency (σ)</TableHead>
+                  <TableHead className="text-right">Improvement</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {students.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center gap-2 justify-end">
+                        <Progress value={s.avgPct} className="h-2 w-40" />
+                        <span className="text-sm">{s.avgPct.toFixed(2)}%</span>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <span className={improvement >= 0 ? "text-green-600" : "text-red-600"}>
-                        {improvement > 0 ? '+' : ''}{improvement.toFixed(0)}%
+                    <TableCell className="text-right">{s.participationRate.toFixed(0)}%</TableCell>
+                    <TableCell className="text-right">{s.consistencyStd.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">
+                      <span className={s.improvementPct >= 0 ? "text-green-600" : "text-red-600"}>
+                        {s.improvementPct >= 0 ? "+" : ""}
+                        {s.improvementPct.toFixed(2)}%
                       </span>
                     </TableCell>
                     <TableCell>
-                      {student.averageScore >= 90 ? (
-                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-green-500 text-primary-foreground hover:bg-green-500/80">
-                          Excellent
+                      {s.risk === "On Track" && (
+                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold border-transparent bg-green-500 text-primary-foreground">
+                          On Track
                         </span>
-                      ) : student.averageScore >= 80 ? (
-                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-blue-500 text-primary-foreground hover:bg-blue-500/80">
-                          Good
+                      )}
+                      {s.risk === "Needs Attention" && (
+                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold border-transparent bg-yellow-500 text-primary-foreground">
+                          Needs Attention
                         </span>
-                      ) : student.averageScore >= 70 ? (
-                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-yellow-500 text-primary-foreground hover:bg-yellow-500/80">
-                          Average
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-red-500 text-primary-foreground hover:bg-red-500/80">
-                          Needs Help
+                      )}
+                      {s.risk === "At Risk" && (
+                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold border-transparent bg-red-500 text-primary-foreground">
+                          At Risk
                         </span>
                       )}
                     </TableCell>
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

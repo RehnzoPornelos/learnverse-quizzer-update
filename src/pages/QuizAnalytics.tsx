@@ -290,6 +290,7 @@ const QuizAnalytics = () => {
               <tbody>
                 {sorted.map((stu, idx) => {
                   const progress = totalQuestions > 0 ? (stu.answered / totalQuestions) * 100 : 0;
+                  const correctPct = totalQuestions > 0 ? (stu.correct / totalQuestions) * 100 : 0;
                   return (
                     <tr key={stu.name} className="border-b">
                       <td className="px-4 py-2">{idx + 1}</td>
@@ -309,7 +310,21 @@ const QuizAnalytics = () => {
                           </span>
                         </div>
                       </td>
-                      <td className="px-4 py-2">{stu.correct}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center">
+                          <div className="flex-1 mr-2">
+                            <div className="h-3 relative w-full rounded-md bg-muted/50">
+                              <div
+                                className="absolute top-0 left-0 h-full rounded-md bg-emerald-500 dark:bg-emerald-600"
+                                style={{ width: `${Math.max(0, Math.min(100, correctPct))}%` }}
+                              />
+                            </div>
+                          </div>
+                          <span className="text-sm">
+                            {stu.correct}/{totalQuestions}
+                          </span>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}

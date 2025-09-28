@@ -27,6 +27,7 @@ export interface Quiz {
   user_id?: string;
   // Duration of the quiz in seconds; optional
   quiz_duration_seconds?: number;
+  is_rumbled?: boolean;
 }
 
 // Get a list of quizzes for the current user
@@ -54,11 +55,22 @@ export async function setQuizActivation(quizId: string, active: boolean) {
     .select('id, is_code_active')
     .single();
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
   return data;
 }
+
+export async function setQuizRumbled(quizId: string, rumbled: boolean) {
+  const { data, error } = await supabase
+    .from('quizzes')
+    .update({ is_rumbled: rumbled, updated_at: new Date().toISOString() })
+    .eq('id', quizId)
+    .select('id, is_rumbled')
+    .single();
+    
+  if (error) throw error;
+  return data;
+}
+
 
 // Get a specific quiz with its questions
 export const getQuizWithQuestions = async (quizId: string) => {
@@ -641,6 +653,7 @@ export async function saveQuiz(
     published?: boolean;
     quiz_duration_seconds?: number | null;
     is_code_active?: boolean;
+    is_rumbled?: boolean;
   },
   questions: Array<{
     id?: string; // may be local temp id for new questions
@@ -665,6 +678,9 @@ export async function saveQuiz(
   }
   if (quizMeta.is_code_active !== undefined) {
     updatePayload.is_code_active = !!quizMeta.is_code_active;
+  }
+  if (quizMeta.is_rumbled !== undefined) {
+    updatePayload.is_rumbled = !!quizMeta.is_rumbled;
   }
   const { error: quizErr } = await supabase
     .from('quizzes')
