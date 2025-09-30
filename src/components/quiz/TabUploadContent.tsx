@@ -86,7 +86,7 @@ const TabUploadContent = ({
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
-        toast.error(`Invalid file type. Please upload one of: ${allowedExtensions.join(', ')}`);
+        toast.error(`Invalid file type. Please only upload the following: ${allowedExtensions.join(', ')}`);
         return;
       }
       if (file.size > 20 * 1024 * 1024) {
@@ -129,7 +129,7 @@ const TabUploadContent = ({
       const allowedExtensions = ['.pdf', '.docx', '.pptx', '.txt'];
       const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
       if (!allowedExtensions.includes(fileExtension)) {
-        toast.error(`Invalid file type. Please upload one of: ${allowedExtensions.join(', ')}`);
+        toast.error(`Invalid file type. Please only upload the following: ${allowedExtensions.join(', ')}`);
         return;
       }
       if (file.size > 20 * 1024 * 1024) {

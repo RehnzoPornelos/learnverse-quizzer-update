@@ -11,6 +11,7 @@ import {
   getUserQuizzesWithSections,
   type QuizWithSections,
   deleteQuiz,
+  getQuizAverageScore,
 } from '@/services/quizService';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
@@ -118,6 +119,8 @@ const ProfessorDashboard = () => {
   const [deletingQuizId, setDeletingQuizId] = useState<string | null>(null);
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [avgByQuiz, setAvgByQuiz] = useState<Record<string, number>>({});
+  const [avgLoading, setAvgLoading] = useState(false);
 
   useEffect(() => {
     const fetchQuizzes = async () => {
@@ -135,6 +138,40 @@ const ProfessorDashboard = () => {
 
     fetchQuizzes();
   }, []);
+
+  useEffect(() => {
+    if (!quizzes.length) {
+      setAvgByQuiz({});
+      return;
+    }
+
+    // latest 4 by UPDATED date (fallback to created_at if updated_at missing)
+    const latest4 = [...quizzes]
+      .sort((a, b) => {
+        const aT = new Date((a as any).updated_at || a.created_at || 0).getTime();
+        const bT = new Date((b as any).updated_at || b.created_at || 0).getTime();
+        return bT - aT;
+      })
+      .slice(0, 4);
+
+    let cancelled = false;
+    setAvgLoading(true);
+    (async () => {
+      try {
+        const avgs = await Promise.all(latest4.map(q => getQuizAverageScore(q.id!)));
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        latest4.forEach((q, i) => { map[q.id!] = avgs[i] ?? 0; });
+        setAvgByQuiz(map);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (!cancelled) setAvgLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [quizzes]);
 
   const calculateCompletionRate = () => {
     if (quizzes.length === 0) return 0;
@@ -299,19 +336,37 @@ const ProfessorDashboard = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {quizzes.slice(0, 4).map((quiz) => (
-                      <div key={quiz.id}>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-sm font-medium truncate">{quiz.title}</span>
-                          <span className="text-sm font-medium">
-                            {Math.floor(Math.random() * 31) + 70}%
-                          </span>
-                        </div>
-                        <Progress value={Math.floor(Math.random() * 31) + 70} className="h-2" />
-                      </div>
-                    ))}
-                    {quizzes.length === 0 && !loading && (
-                      <p className="text-center py-4 text-muted-foreground">No quiz data available</p>
+                    {(() => {
+                      const latest4 = [...quizzes]
+                        .sort((a, b) => {
+                          const aT = new Date((a as any).updated_at || a.created_at || 0).getTime();
+                          const bT = new Date((b as any).updated_at || b.created_at || 0).getTime();
+                          return bT - aT;
+                        })
+                        .slice(0, 4);
+
+                      if (loading) {
+                        return <p className="text-center py-4 text-muted-foreground">Loading quizzes...</p>;
+                      }
+                      if (latest4.length === 0) {
+                        return <p className="text-center py-4 text-muted-foreground">No quiz data available</p>;
+                      }
+
+                      return latest4.map((quiz) => {
+                        const pct = Math.round((avgByQuiz[quiz.id!] ?? 0));
+                        return (
+                          <div key={quiz.id}>
+                            <div className="flex justify-between mb-1">
+                              <span className="text-sm font-medium truncate">{quiz.title}</span>
+                              <span className="text-sm font-medium">{pct}%</span>
+                            </div>
+                            <Progress value={pct} className="h-2" />
+                          </div>
+                        );
+                      });
+                    })()}
+                    {avgLoading && (
+                      <p className="text-xs text-muted-foreground text-right">Updating averages…</p>
                     )}
                   </div>
                 </CardContent>

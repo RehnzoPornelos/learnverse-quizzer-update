@@ -966,3 +966,120 @@ export const getQuizWithSections = async (quizId: string): Promise<QuizWithSecti
   delete data.quiz_sections;
   return { ...(data as Quiz), section_codes: codes } as QuizWithSections;
 };
+
+// Add/keep this alongside your other exports
+export type QuestionStat = {
+  questionId: string;
+  text: string;
+  correct: number;
+  incorrect: number;
+  avgTimeSeconds: number | null;
+  difficulty?: string | null; // left for future use, we'll return null
+};
+
+// REPLACE your current getQuestionStats with this
+export async function getQuestionStats(quizId: string, sectionId?: string): Promise<QuestionStat[]> {
+  const { data, error } = await supabase.rpc("get_question_stats_rpc", {
+    p_quiz_id: quizId,
+    p_section_id: sectionId ?? null,
+  });
+  if (error) throw error;
+
+  return (data ?? []).map((r: any) => ({
+    questionId: r.question_id,
+    text: r.question_text,
+    correct: r.correct ?? 0,
+    incorrect: r.incorrect ?? 0,
+    avgTimeSeconds: typeof r.avg_time_seconds === "number" ? r.avg_time_seconds : 0,
+    difficulty: null,
+  }));
+}
+
+
+/**
+ * Always compute from analytics_student_performance so the
+ * distribution matches the table rows (and respects section filter).
+ */
+export type ScoreBuckets = { excellent: number; good: number; average: number; poor: number };
+
+function bucketize(vPct: number): keyof ScoreBuckets {
+  if (vPct >= 90) return "excellent";
+  if (vPct >= 75) return "good";
+  if (vPct >= 60) return "average";
+  return "poor";
+}
+
+export async function getScoreBuckets(quizId: string, sectionId?: string): Promise<ScoreBuckets> {
+  // Count items for this quiz
+  const { count: totalQuestions, error: cntErr } = await supabase
+    .from("quiz_questions")
+    .select("id", { count: "exact", head: true })
+    .eq("quiz_id", quizId);
+  if (cntErr) throw cntErr;
+
+  const tq = totalQuestions || 0;
+
+  // Pull scores
+  let q = supabase.from("analytics_student_performance").select("score").eq("quiz_id", quizId);
+  if (sectionId) q = q.eq("section_id", sectionId);
+  const { data: rows, error } = await q;
+  if (error) throw error;
+
+  const buckets: ScoreBuckets = { excellent: 0, good: 0, average: 0, poor: 0 };
+  for (const r of rows || []) {
+    const s = parseFloat(String(r.score));
+    if (!Number.isFinite(s)) continue;
+
+    // Detect raw vs percent
+    let pct =
+      tq && s <= tq
+        ? (s / tq) * 100
+        : s <= 100
+        ? s
+        : NaN;
+
+    if (!Number.isFinite(pct)) continue;
+    pct = Math.max(0, Math.min(100, Math.round(pct * 100) / 100));
+
+    buckets[bucketize(pct)]++;
+  }
+  return buckets;
+}
+
+// --- Average % score for a quiz across ALL sections ---
+// Uses analytics_student_performance + quiz_questions count.
+// Works whether ASP.score is "raw correct" or already a percent.
+export async function getQuizAverageScore(quizId: string): Promise<number> {
+  // Count items for this quiz
+  const { count: totalQuestions, error: cntErr } = await supabase
+    .from("quiz_questions")
+    .select("id", { count: "exact", head: true })
+    .eq("quiz_id", quizId);
+  if (cntErr) throw cntErr;
+  const tq = totalQuestions || 0;
+
+  // Pull all student scores for this quiz (all sections)
+  const { data: rows, error } = await supabase
+    .from("analytics_student_performance")
+    .select("score")
+    .eq("quiz_id", quizId);
+  if (error) throw error;
+
+  if (!rows || rows.length === 0) return 0;
+
+  let sum = 0;
+  let n = 0;
+  for (const r of rows) {
+    const raw = parseFloat(String((r as any).score));
+    if (!Number.isFinite(raw)) continue;
+
+    // Convert to percent if raw looks like "correct items"
+    const pct =
+      tq && raw <= tq ? (raw / tq) * 100 :
+      raw <= 100 ? raw : 0;
+
+    sum += pct;
+    n++;
+  }
+  return n ? Math.round((sum / n) * 100) / 100 : 0;
+}

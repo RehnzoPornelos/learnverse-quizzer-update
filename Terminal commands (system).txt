@@ -13,7 +13,13 @@ npm i -D supabase
 npx supabase login
 npx supabase gen types typescript --project-id tjmtqmwhkqrbscxsegjl --schema public > src/integrations/supabase/types.ts
 
+(For Github commits)
+git add -A
+git commit -m "Added Class Section Table in the Database"
+git push
 
+(if no upstream set)
+git push -u origin main
 
 STEP-BY-STEP DEPLOYMENT
 

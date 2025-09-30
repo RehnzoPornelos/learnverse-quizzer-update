@@ -20,6 +20,7 @@ interface PerformanceData {
 interface PerformanceOverviewProps {
   professorId: string | null; // owner of the quizzes
   sectionId: string | null;   // only this section's data (null = all sections)
+  hasAnalyticsData?: boolean;
 }
 
 const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProps) => {
@@ -38,11 +39,12 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
     const run = async () => {
       setIsLoading(true);
       try {
-        // 1) Quizzes owned by this professor
+        // 1) Quizzes owned by this professor — ONLY published (active) ones
         const { data: quizRows, error: qErr } = await supabase
           .from("quizzes")
           .select("id, title")
-          .eq("user_id", professorId);
+          .eq("user_id", professorId)
+          .eq("published", true); // <-- filter to active quizzes only
         if (qErr) throw qErr;
 
         let quizIds = (quizRows ?? []).map((q) => q.id as string);
