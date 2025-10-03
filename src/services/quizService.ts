@@ -30,6 +30,32 @@ export interface Quiz {
   is_rumbled?: boolean;
 }
 
+/** Utility: seconds -> "Xm Ys" */
+function secsToText(total?: number | null) {
+  if (!Number.isFinite(Number(total))) return "—";
+  const s = Number(total);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r}s`;
+}
+
+async function getQuestionCount(quizId: string): Promise<number> {
+  // Try quizzes.question_no first
+  const { data: qz, error: qe } = await supabase
+    .from("quizzes")
+    .select("question_no")
+    .eq("id", quizId)
+    .single();
+  if (!qe && qz?.question_no) return Number(qz.question_no);
+
+  // Fallback: count quiz_questions
+  const { count } = await supabase
+    .from("quiz_questions")
+    .select("id", { count: "exact", head: true })
+    .eq("quiz_id", quizId);
+  return Number(count ?? 0);
+}
+
 // Get a list of quizzes for the current user
 export const getUserQuizzes = async () => {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -72,311 +98,168 @@ export async function setQuizRumbled(quizId: string, rumbled: boolean) {
 }
 
 
-// Get a specific quiz with its questions
-export const getQuizWithQuestions = async (quizId: string) => {
-  // Fetch the quiz
-  const { data: quiz, error: quizError } = await supabase
+/** Get quiz row + ordered questions (no RPC) */
+export async function getQuizWithQuestions(quizId: string) {
+  const { data: quiz, error: qErr } = await supabase
     .from('quizzes')
-    .select('*')
+    .select('id, title, question_no, published, quiz_duration_seconds, is_code_active, is_rumbled')
     .eq('id', quizId)
     .single();
-    
-  if (quizError) {
-    console.error("Error fetching quiz:", quizError);
-    throw quizError;
-  }
-  
-  // Fetch the questions for this quiz
-  const { data: questions, error: questionsError } = await supabase
+  if (qErr) throw qErr;
+  if (!quiz) return null;
+
+  const { data: questions, error: qqErr } = await supabase
     .from('quiz_questions')
-    .select('*')
+    //          ⬇⬇⬇ add 'options' here
+    .select('id, text, type, options, correct_answer, order_position')
     .eq('quiz_id', quizId)
     .order('order_position', { ascending: true });
-    
-  if (questionsError) {
-    console.error("Error fetching questions:", questionsError);
-    throw questionsError;
-  }
-  
-  return { ...quiz, questions };
-};
+  if (qqErr) throw qqErr;
 
-// Fetch the list of sections (class_sections) that are linked to the given quiz via quiz_sections.
-// Each returned row contains the section id and its code. If no sections exist, an empty array is returned.
-export const getQuizEligibleSections = async (quizId: string) => {
-  if (!quizId) throw new Error('Missing quiz id');
-  // Fetch section ids for this quiz
-  const { data: qs, error: qsErr } = await supabase
-    .from('quiz_sections')
-    .select('section_id')
-    .eq('quiz_id', quizId);
-  if (qsErr) throw qsErr;
-  const sectionIds = (qs ?? []).map((row: any) => row.section_id);
-  if (!sectionIds.length) return [];
-  // Fetch the section codes
-  const { data: sections, error: sectErr } = await supabase
-    .from('class_sections')
-    .select('id, code')
-    .in('id', sectionIds)
-    .order('code', { ascending: true });
-  if (sectErr) throw sectErr;
-  return sections ?? [];
-};
+  // normalize options to string[] so the dropdown sees choices
+  const normalized = (questions ?? []).map((q: any) => ({
+    ...q,
+    options: Array.isArray(q.options)
+      ? q.options
+          .map((o: any) =>
+            typeof o === 'string' ? o : (o?.text ?? o?.label ?? o?.value ?? '')
+          )
+          .filter(Boolean)
+      : [],
+  }));
 
-// Compute aggregated analytics for a quiz. Optionally filter by a specific section id.
-// Returns averageScore (as a percentage from 0–100), the number of students who completed the quiz
-// (i.e. rows in analytics_student_performance), the total number of students who attempted at least one
-// question (unique student_name_norm in quiz_responses), and the hardest question with its text,
-// correct rate and average time (if data is available).
-export const getQuizAnalytics = async (quizId: string, sectionId?: string) => {
-  if (!quizId) throw new Error('Missing quiz id');
-  // 1) Fetch all performance rows for this quiz (optionally filtered by section)
-  const perfQuery = supabase
-    .from('analytics_student_performance')
-    .select('id, score, completion_time_seconds, student_name_norm, created_at, attempt_no, section_id')
-    .eq('quiz_id', quizId);
-  const { data: perfData, error: perfErr } = sectionId
-    ? await perfQuery.eq('section_id', sectionId)
-    : await perfQuery;
-  if (perfErr) throw perfErr;
-  const performances = perfData ?? [];
+  return { ...quiz, questions: normalized };
+}
 
-  // 2) Determine number of questions in this quiz
-  const { data: qrows, error: qerr } = await supabase
-    .from('quiz_questions')
-    .select('id')
-    .eq('quiz_id', quizId);
-  if (qerr) throw qerr;
-  const totalQuestions = (qrows ?? []).length || 1;
+/** Sections linked to a quiz (via quiz_sections -> class_sections) */
+export async function getQuizEligibleSections(quizId: string) {
+  const { data: links, error: lErr } = await supabase
+    .from("quiz_sections")
+    .select("section_id")
+    .eq("quiz_id", quizId);
 
-  // 3) Compute average score as a percentage
-  let averageScore = 0;
-  if (performances.length > 0) {
-    const sumPercent = performances.reduce((acc: number, row: any) => {
-      const rawScore = typeof row.score === 'number' ? row.score : Number(row.score);
-      const pct = totalQuestions > 0 ? (rawScore * 100) / totalQuestions : 0;
-      return acc + pct;
-    }, 0);
-    averageScore = sumPercent / performances.length;
-  }
+  if (lErr) throw lErr;
+  const secIds = Array.from(new Set((links ?? []).map((r: any) => r.section_id))).filter(Boolean);
+  if (!secIds.length) return [];
 
-  // 4) Students completed = count of performance rows
-  const studentsCompleted = performances.length;
+  const { data: secs, error: sErr } = await supabase
+    .from("class_sections")
+    .select("id, code")
+    .in("id", secIds);
 
-  // 5) Compute total students who attempted (distinct student_name_norm from quiz_responses)
-  // 5) Compute total students who attempted (distinct student_name_norm)
-  const baseResp = (supabase as any) // cast to bypass missing table in generated types
-    .from('quiz_responses')
-    .select('student_name_norm, section_id')
-    .eq('quiz_id', quizId);
+  if (sErr) throw sErr;
+  return (secs ?? []).map((s: any) => ({ id: s.id as string, code: String(s.code) }));
+}
 
-  const { data: respData, error: respErr } = sectionId
-    ? await baseResp.eq('section_id', sectionId)
-    : await baseResp;
-  if (respErr) throw respErr;
+/** Aggregate quiz analytics from analytics_student_performance */
+export async function getQuizAnalytics(quizId: string, sectionId?: string) {
+  const qCount = await getQuestionCount(quizId);
 
-  const studentsSet = new Set<string>();
-  (respData ?? []).forEach((row: any) => {
-    if (row.student_name_norm) studentsSet.add(row.student_name_norm as string);
-  });
-  const totalStudents = studentsSet.size;
+  let q = supabase
+    .from("analytics_student_performance")
+    .select("score, student_name_norm, section_id")
+    .eq("quiz_id", quizId);
+  if (sectionId) q = q.eq("section_id", sectionId);
 
-  // 6) Determine hardest question using aggregated table
-  let hardest:
-    | { id: string; correctRate: number; avgTimeSeconds: number; text?: string }
-    | null = null;
+  const { data, error } = await q;
+  if (error) throw error;
 
-  const { data: qperfData, error: qperfErr } = await (supabase as any)
-    .from('analytics_question_performance')
-    .select('question_id, correct_count, incorrect_count, avg_time_seconds')
-    .eq('quiz_id', quizId);
-  if (qperfErr) throw qperfErr;
+  const rows = (data ?? []) as any[];
+  const key = (r: any) => `${String(r.student_name_norm ?? "").trim()}|${String(r.section_id ?? "")}`;
+  const distinct = new Set(rows.map(key));
 
-  (qperfData ?? []).forEach((row: any) => {
-    const correct = typeof row.correct_count === 'number'
-      ? row.correct_count : Number(row.correct_count ?? 0);
-    const incorrect = typeof row.incorrect_count === 'number'
-      ? row.incorrect_count : Number(row.incorrect_count ?? 0);
-    const denom = correct + incorrect;
-    const rate = denom > 0 ? correct / denom : 0;
-    const avgTime = row.avg_time_seconds != null ? Number(row.avg_time_seconds) : 0;
-
-    if (!hardest) {
-      hardest = { id: row.question_id, correctRate: rate, avgTimeSeconds: avgTime };
-    } else if (rate < hardest.correctRate || (rate === hardest.correctRate && avgTime > hardest.avgTimeSeconds)) {
-      hardest = { id: row.question_id, correctRate: rate, avgTimeSeconds: avgTime };
-    }
-  });
-
-  // Fetch question text for hardest question
-  if (hardest) {
-    const { data: qData, error: qTextErr } = await supabase
-      .from('quiz_questions')
-      .select('id, text')
-      .eq('id', hardest.id)
-      .maybeSingle();
-    if (!qTextErr && qData) {
-      hardest.text = qData.text;
-    }
-  }
+  const avgRaw =
+    rows.length ? rows.reduce((a, r) => a + Number(r.score ?? 0), 0) / rows.length : 0;
+  const avgPct = qCount ? (avgRaw / qCount) * 100 : 0;
 
   return {
-    averageScore,
-    studentsCompleted,
-    totalStudents,
-    hardestQuestion: hardest ? { id: hardest.id, text: hardest.text || '', correctRate: hardest.correctRate, avgTimeSeconds: hardest.avgTimeSeconds } : undefined,
+    averageScore: Math.max(0, Math.min(100, avgPct)), // percent 0–100
+    studentsCompleted: rows.length,
+    totalStudents: distinct.size,
   };
-};
+}
 
-// Fetch performance list for students taking a quiz. Optionally filter by section id.
-// Returns an array of objects containing performance id (student_perf id), student name, percent score, raw score,
-// completion time (ISO string), timeSpent (formatted), attempt number and section id.
-export const getStudentPerformanceList = async (quizId: string, sectionId?: string) => {
-  if (!quizId) throw new Error('Missing quiz id');
-  // Fetch all performance rows for this quiz and optional section
-  const perfQuery = supabase
-    .from('analytics_student_performance')
-    .select('id, student_name, score, completion_time_seconds, created_at, attempt_no, section_id')
-    .eq('quiz_id', quizId)
-    .order('created_at', { ascending: false });
-  const { data: perfData, error: perfErr } = sectionId
-    ? await perfQuery.eq('section_id', sectionId)
-    : await perfQuery;
-  if (perfErr) throw perfErr;
-  const performances = perfData ?? [];
-  // Determine number of questions to compute percent
-  const { data: qrows, error: qerr } = await supabase
-    .from('quiz_questions')
-    .select('id')
-    .eq('quiz_id', quizId);
-  if (qerr) throw qerr;
-  const totalQuestions = (qrows ?? []).length || 1;
-  return performances.map((row: any) => {
-    const rawScore = typeof row.score === 'number' ? row.score : Number(row.score);
-    const pct = totalQuestions > 0 ? (rawScore * 100) / totalQuestions : 0;
-    const secs = row.completion_time_seconds != null ? Number(row.completion_time_seconds) : 0;
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    const timeSpent = `${mins}m ${remSecs.toString().padStart(2, '0')}s`;
+
+/** List students (rows in analytics_student_performance) */
+export async function getStudentPerformanceList(quizId: string, sectionId?: string) {
+  const qCount = await getQuestionCount(quizId);
+
+  let q = supabase
+    .from("analytics_student_performance")
+    .select("id, student_name, score, completion_time_seconds, created_at, section_id")
+    .eq("quiz_id", quizId)
+    .order("created_at", { ascending: true });
+  if (sectionId) q = q.eq("section_id", sectionId);
+
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const rows = (data ?? []) as any[];
+  return rows.map((r) => {
+    const raw = Number(r.score ?? 0);
+    const pct = qCount ? (raw / qCount) * 100 : 0;
     return {
-      id: row.id,
-      student_name: row.student_name,
-      score: Math.round(pct),
-      rawScore: rawScore,
-      completedAt: row.created_at,
-      timeSpent: timeSpent,
-      attempt_no: row.attempt_no,
-      section_id: row.section_id,
+      id: r.id as string,
+      student_name: r.student_name as string,
+      score: Math.max(0, Math.min(100, Math.round(pct))), // percent for UI
+      completedAt: r.created_at ? String(r.created_at) : null,
+      timeSpent: secsToText(r.completion_time_seconds),
     };
   });
-};
+}
 
-// Fetch detailed responses for a given student performance id. This returns a list of questions with
-// their text, the student's answer, the correct answer, whether it was correct, and time spent.
-export const getStudentPerformanceDetails = async (studentPerfId: string) => {
-  if (!studentPerfId) throw new Error('Missing student performance id');
-  // Fetch all quiz responses for this performance
-  const { data: responses, error: respErr } = await (supabase as any)
-    .from('quiz_responses')
-    .select('question_id, selected_option, text_answer, is_correct, time_spent_seconds')
-    .eq('student_perf_id', studentPerfId);
-  if (respErr) throw respErr;
-  const respRows = responses ?? [];
-  if (respRows.length === 0) return [];
+/** Student details (answers) composed from quiz_responses + quiz_questions */
+export async function getStudentPerformanceDetails(perfId: string) {
+  const { data: resp, error: rErr } = await supabase
+    .from("quiz_responses")
+    .select("question_id, is_correct, time_spent_seconds, selected_option, text_answer, quiz_id")
+    .eq("student_perf_id", perfId);
 
-  // Gather unique question ids
-  // Gather unique question ids (ensure string[] for .in(...))
-  const qIds: string[] = Array.from(
-    new Set(
-      (respRows as any[]).map((row) => String(row.question_id))
-    )
-  );
+  if (rErr) throw rErr;
+  const responses = (resp ?? []) as any[];
+  if (!responses.length) return [];
 
-  // Fetch question details
-  const { data: qData, error: qErr } = await supabase
-    .from('quiz_questions')
-    .select('id, text, type, options, correct_answer')
-    .in('id', qIds);
+  const qids = Array.from(new Set(responses.map((r) => r.question_id))).filter(Boolean);
+  const quizId = responses[0]?.quiz_id as string | undefined;
+
+  const { data: questions, error: qErr } = await supabase
+    .from("quiz_questions")
+    .select("id, text, type, correct_answer")
+    .in("id", qids);
   if (qErr) throw qErr;
-  const qMap: Record<string, any> = {};
-  (qData ?? []).forEach((q: any) => {
-    qMap[q.id] = q;
-  });
-  // Helper to extract option text
-  const getOptionText = (options: any, index: number | null) => {
-    if (!options || index == null || index < 0) return null;
-    // options may be array of strings or array of objects with text field
-    const arr = Array.isArray(options) ? options : [];
-    const item = arr[index];
-    if (!item) return null;
-    return typeof item === 'string' ? item : (item.text ?? String(item));
-  };
-  return respRows.map((resp: any) => {
-    const q = qMap[resp.question_id];
-    if (!q) {
-      return {
-        questionId: resp.question_id,
-        questionText: 'Unknown question',
-        correctAnswer: null,
-        studentAnswer: null,
-        isCorrect: resp.is_correct,
-        timeSpent: '0m 00s',
-      };
-    }
-    // Determine correct answer text
-    let correctDisplay: any = null;
-    if (q.type === 'multiple_choice' || q.type === 'mcq') {
-      const ca = q.correct_answer;
-      let idx: number | null = null;
-      if (typeof ca === 'number') idx = ca;
-      else if (typeof ca === 'string') {
-        if (/^\d+$/.test(ca)) idx = parseInt(ca, 10);
-        else if (/^[A-Za-z]$/.test(ca)) idx = ca.toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
-      }
-      const optTxt = getOptionText(q.options, idx ?? null);
-      correctDisplay = optTxt ?? (typeof ca === 'string' ? ca : String(ca));
-    } else if (q.type === 'true_false' || q.type === 'true_false') {
-      const ca = q.correct_answer;
-      if (ca === true || ca === 'true') correctDisplay = 'True';
-      else if (ca === false || ca === 'false') correctDisplay = 'False';
-      else correctDisplay = String(ca ?? '');
+
+  const qMap = new Map(questions?.map((q: any) => [q.id, q]) ?? []);
+  const out = responses.map((r) => {
+    const q = qMap.get(r.question_id) || {};
+    const type = String(q.type ?? "").toLowerCase();
+    const correct = q.correct_answer;
+
+    // normalize student answer for display
+    let studentAnswer = "";
+    if (type.includes("short")) {
+      studentAnswer = String(r.text_answer ?? "");
     } else {
-      correctDisplay = q.correct_answer;
+      // MCQ/TF stored as jsonb
+      studentAnswer = (r.selected_option === null || r.selected_option === undefined)
+        ? ""
+        : String(r.selected_option);
+      // Strip outer quotes if it's a JSON scalar string
+      if (/^".*"$/.test(studentAnswer)) studentAnswer = studentAnswer.slice(1, -1);
     }
-    // Determine student answer text
-    let studentDisplay: any = null;
-    if (q.type === 'multiple_choice' || q.type === 'mcq') {
-      const sa = resp.selected_option;
-      let idx: number | null = null;
-      if (typeof sa === 'number') idx = sa;
-      else if (typeof sa === 'string') {
-        if (/^\d+$/.test(sa)) idx = parseInt(sa, 10);
-        else if (/^[A-Za-z]$/.test(sa)) idx = sa.toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
-      }
-      const optTxt = getOptionText(q.options, idx ?? null);
-      studentDisplay = optTxt ?? (typeof sa === 'string' ? sa : String(sa));
-    } else if (q.type === 'true_false' || q.type === 'true_false') {
-      const sa = resp.selected_option;
-      if (sa === true || sa === 'true') studentDisplay = 'True';
-      else if (sa === false || sa === 'false') studentDisplay = 'False';
-      else studentDisplay = String(sa ?? '');
-    } else {
-      studentDisplay = resp.text_answer ?? '';
-    }
-    const secs = resp.time_spent_seconds != null ? Number(resp.time_spent_seconds) : 0;
-    const mins = Math.floor(secs / 60);
-    const rem = secs % 60;
-    const timeSpent = `${mins}m ${rem.toString().padStart(2, '0')}s`;
+
     return {
-      questionId: q.id,
-      questionText: q.text,
-      correctAnswer: correctDisplay,
-      studentAnswer: studentDisplay,
-      isCorrect: resp.is_correct,
-      timeSpent: timeSpent,
+      questionText: String(q.text ?? ""),
+      isCorrect: !!r.is_correct,
+      timeSpent: secsToText(r.time_spent_seconds),
+      correctAnswer: typeof correct === "string" ? correct : JSON.stringify(correct),
+      studentAnswer,
+      quizId,
     };
   });
-};
+
+  // Sort by question order if you want: requires fetching order_position; omit for now.
+  return out;
+}
 
 // Delete a quiz and its associated questions
 export const deleteQuiz = async (quizId: string) => {
@@ -974,27 +857,81 @@ export type QuestionStat = {
   correct: number;
   incorrect: number;
   avgTimeSeconds: number | null;
-  difficulty?: string | null; // left for future use, we'll return null
+  difficulty?: string | null;
+  questionType?: string;
 };
 
-// REPLACE your current getQuestionStats with this
-export async function getQuestionStats(quizId: string, sectionId?: string): Promise<QuestionStat[]> {
-  const { data, error } = await supabase.rpc("get_question_stats_rpc", {
-    p_quiz_id: quizId,
-    p_section_id: sectionId ?? null,
+/** Per-question stats computed client side (no RPC) */
+export async function getQuestionStats(quizId: string, sectionId?: string) {
+  // 1) questions (now also fetching `type`)
+  const { data: questions, error: qErr } = await supabase
+    .from("quiz_questions")
+    .select("id, text, order_position, type")
+    .eq("quiz_id", quizId)
+    .order("order_position", { ascending: true });
+  if (qErr) throw qErr;
+  const qList = (questions ?? []) as any[];
+  if (!qList.length) return [];
+
+  // 2) responses
+  let qr = supabase
+    .from("quiz_responses")
+    .select("question_id, is_correct, time_spent_seconds, section_id")
+    .eq("quiz_id", quizId);
+  if (sectionId) qr = qr.eq("section_id", sectionId);
+  const { data: resp, error: rErr } = await qr;
+  if (rErr) throw rErr;
+  const rows = (resp ?? []) as any[];
+
+  // 3) aggregate
+  type Agg = { correct: number; incorrect: number; tSum: number; tN: number };
+  const agg = new Map<string, Agg>();
+  for (const r of rows) {
+    const k = r.question_id as string;
+    const a = agg.get(k) ?? { correct: 0, incorrect: 0, tSum: 0, tN: 0 };
+    if (r.is_correct) a.correct++; else a.incorrect++;
+    if (Number.isFinite(Number(r.time_spent_seconds))) {
+      a.tSum += Number(r.time_spent_seconds);
+      a.tN++;
+    }
+    agg.set(k, a);
+  }
+
+  const labelDifficulty = (pctCorrect: number, avgTime: number) => {
+    let label =
+      pctCorrect >= 80 ? "Easy" :
+      pctCorrect >= 60 ? "Moderate" :
+      pctCorrect >= 40 ? "Hard" : "Very Hard";
+    if (avgTime >= 45 && pctCorrect < 50) label = label === "Hard" ? "Very Hard" : label;
+    else if (avgTime <= 20 && pctCorrect >= 70) label = label === "Moderate" ? "Easy" : label;
+    return label;
+  };
+
+  const prettyType = (t: string | null | undefined) => {
+    const v = String(t ?? "").toLowerCase();
+    if (["mcq","multiple_choice","multiple-choice","multiple choice"].includes(v)) return "MCQ";
+    if (["true_false","true/false","truefalse","tf","true-false"].includes(v)) return "True/False";
+    if (["short_answer","short answer","sa"].includes(v)) return "Short Answer";
+    return "—";
+  };
+
+  return qList.map((q) => {
+    const a = agg.get(q.id) ?? { correct: 0, incorrect: 0, tSum: 0, tN: 0 };
+    const total = a.correct + a.incorrect;
+    const pct = total ? (a.correct / total) * 100 : 0;
+    const avgTime = a.tN ? a.tSum / a.tN : 0;
+
+    return {
+      questionId: q.id as string,
+      text: String(q.text ?? ""),
+      questionType: prettyType(q.type),                 // ← NEW
+      correct: a.correct,
+      incorrect: a.incorrect,
+      avgTimeSeconds: Math.round(avgTime * 100) / 100,
+      difficulty: labelDifficulty(pct, avgTime),
+    };
   });
-  if (error) throw error;
-
-  return (data ?? []).map((r: any) => ({
-    questionId: r.question_id,
-    text: r.question_text,
-    correct: r.correct ?? 0,
-    incorrect: r.incorrect ?? 0,
-    avgTimeSeconds: typeof r.avg_time_seconds === "number" ? r.avg_time_seconds : 0,
-    difficulty: null,
-  }));
 }
-
 
 /**
  * Always compute from analytics_student_performance so the
@@ -1082,4 +1019,19 @@ export async function getQuizAverageScore(quizId: string): Promise<number> {
     n++;
   }
   return n ? Math.round((sum / n) * 100) / 100 : 0;
+}
+export async function deleteStudentSubmission(perfId: string) {
+  const { data, error } = await supabase
+    .rpc("rpc_delete_quiz_attempt", { p_perf_id: perfId });
+
+  if (error) return { ok: false, message: error.message };
+
+  const counts = Array.isArray(data) && data[0]
+    ? data[0]
+    : { responses_deleted: 0, performance_deleted: 0 };
+
+  const ok = Number(counts.performance_deleted) === 1;
+  return ok
+    ? { ok: true, counts }
+    : { ok: false, message: "No matching attempt found or blocked by policy.", counts };
 }

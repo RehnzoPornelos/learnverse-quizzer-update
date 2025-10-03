@@ -1,11 +1,13 @@
 // StudentProgressChart.tsx
-// - Y-axis label no longer overlaps (outside label + bigger left margin + tickMargin)
-// - Respects selectedSection prop (already supported) – now just cleaner UI
-// - Adds Cluster filter dropdown for the details table
-// - Keeps section “code” (not UUID), % scoring, and professor-friendly columns
+// - Axis labels no longer overlap (bigger margins + outside positioning + tickMargin)
+// - Chart and "Cluster Details" now share the SAME fixed color mapping:
+//     High Achievers = green, On-Track = yellow, Needs Support = blue
+// - Legend colors follow the mapping because we render <Scatter> by label
+// - Everything else kept as-is
 
 import { useCallback, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/context/AuthContext";
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle
 } from "@/components/ui/card";
@@ -30,13 +32,18 @@ type StudentFeature = {
   avgTimePerQuestion: number;     // seconds
 };
 
-type ClusteredStudent = StudentFeature & { cluster: number; clusterLabel: string; };
+type ClusteredStudent = StudentFeature & { cluster: number; clusterLabel: "High Achievers" | "On-Track" | "Needs Support" | string };
 
 type Props = { selectedSection?: string | null }; // "all" or section_id or null
 
-const COLORS = ["#00A86B", "#3B82F6", "#F59E0B", "#EF4444", "#8B5CF6", "#10B981"];
+// ---- FIXED CLUSTER COLORS (shared by chart & table) ----
+const CLUSTER_COLORS: Record<string, string> = {
+  "High Achievers": "#00A86B", // green
+  "On-Track": "#F59E0B",       // yellow/orange
+  "Needs Support": "#3B82F6",  // blue
+};
 
-// --------- helpers ---------
+// ---- helpers ----
 const toNum = (v:any) => {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
@@ -100,7 +107,6 @@ function kmeans2D(X:number[][], k:number, maxIter=80) {
   return {labels, centroids};
 }
 
-// --------- component ---------
 export default function StudentProgressChart({ selectedSection = "all" }: Props) {
   const [isRunning, setIsRunning] = useState(false);
   const [clustered, setClustered] = useState<ClusteredStudent[]>([]);
@@ -108,6 +114,7 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
   const [centroids, setCentroids] = useState<number[][]>([]);
   const [counts, setCounts] = useState({students:0, quizzes:0});
   const [sectionCodeMap, setSectionCodeMap] = useState<Map<string,string>>(new Map());
+  const { user } = useAuth();
 
   // NEW: filter which cluster to show in the table
   const [clusterFilter, setClusterFilter] = useState<"ALL" | "High Achievers" | "On-Track" | "Needs Support">("ALL");
@@ -117,79 +124,84 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
     setClustered([]); setKUsed(null); setCentroids([]); setCounts({students:0, quizzes:0});
 
     try {
-      // A) Published quizzes with question_no
+      if (!user?.id) return;
+
+      // A) Only this professor's PUBLISHED quizzes
       const { data: quizRows, error: quizErr } = await supabase
         .from("quizzes")
         .select("id, question_no")
-        .eq("published", true);
+        .eq("published", true)
+        .eq("user_id", user.id);
       if (quizErr) throw quizErr;
-      const quizQMap = new Map<string, number>();
-      for (const r of quizRows ?? []) quizQMap.set(String(r.id), toNum(r.question_no));
 
-      // B) Sections (to show code instead of UUID)
-      const { data: sectionRows, error: secErr } = await supabase
+      const quizIds = (quizRows ?? []).map(r => String(r.id));
+      const quizQMap = new Map<string, number>();
+      for (const r of quizRows ?? []) quizQMap.set(String(r.id), Number(r.question_no ?? 0));
+
+      if (quizIds.length === 0) {
+        setCounts({ students: 0, quizzes: 0 });
+        setClustered([]); setKUsed(null); setCentroids([]);
+        setIsRunning(false);
+        return;
+      }
+
+      // B) section codes
+      const { data: qsRows } = await supabase
+        .from("quiz_sections")
+        .select("section_id")
+        .in("quiz_id", quizIds);
+      const sectionIds = Array.from(new Set((qsRows ?? []).map(r => String(r.section_id)))).filter(Boolean);
+
+      const { data: sectionRows } = await supabase
         .from("class_sections")
-        .select("id, code");
-      if (secErr) throw secErr;
+        .select("id, code")
+        .in("id", sectionIds.length ? sectionIds : ["00000000-0000-0000-0000-000000000000"]);
+
       const map = new Map<string, string>();
       for (const r of sectionRows ?? []) map.set(String(r.id), String(r.code));
       setSectionCodeMap(map);
 
-      // C) Pull analytics_student_performance (optionally filter section on server)
+      // C) analytics for ONLY those quizzes (optional section filter)
       const perf: AnyRow[] = [];
       const pageSize = 1000; let from=0, to=pageSize-1;
       while (true) {
-        let q = supabase.from("analytics_student_performance").select("*").range(from, to);
+        let q = supabase
+          .from("analytics_student_performance")
+          .select("*")
+          .in("quiz_id", quizIds)
+          .range(from, to);
+
         if (selectedSection && selectedSection !== "all") q = q.eq("section_id", selectedSection);
+
         const { data, error } = await q;
         if (error) throw error;
+
         const batch = (data as AnyRow[]) ?? [];
         perf.push(...batch);
         if (batch.length < pageSize) break;
         from += pageSize; to += pageSize;
       }
 
-      // D) Keep only rows whose quiz is published
-      const publishedSet = new Set([...quizQMap.keys()]);
-      const perfFinal = (perf ?? []).filter(r => publishedSet.has(String(r.quiz_id ?? "")));
-      if (selectedSection && selectedSection !== "all") {
-        const id = selectedSection;
-        perfFinal.splice(0, perfFinal.length, ...perfFinal.filter(r => String(r.section_id ?? "") === id));
-      }
-      if (!perfFinal.length) { setCounts({students:0, quizzes:quizQMap.size}); return; }
+      if (!perf.length) { setCounts({students:0, quizzes:quizIds.length}); return; }
 
-      // E) Aggregate per student_key
       type Agg = {
-        studentName: string;
-        sectionId: string | null;
-        pctScores: number[];     // per-quiz % scores
-        timeSum: number;         // sum completion_time_seconds
-        questionSum: number;     // sum question_no (for pace)
-        quizIds: Set<string>;
+        studentName: string; sectionId: string | null;
+        pctScores: number[]; timeSum: number; questionSum: number; quizIds: Set<string>;
       };
       const perStudent: Record<string, Agg> = {};
-      for (const r of perfFinal) {
+
+      for (const r of perf) {
         const sid = (r.section_id ?? null) as string | null;
         const name = String(r.student_name ?? "");
-        const nameNorm = String(r.student_name_norm ?? "");
-        const key = `${nameNorm}|${sid ?? "null"}`;
-
+        const key = `${String(r.student_name_norm ?? "").trim()}|${sid ?? "null"}`;
         const qid = String(r.quiz_id ?? "");
-        const rawScore = toNum(r.score);                 // raw correct count
+        const rawScore = toNum(r.score);
         const secs = toNum(r.completion_time_seconds);
         const qno = quizQMap.get(qid) ?? 0;
 
         if (!perStudent[key]) {
-          perStudent[key] = {
-            studentName: name,
-            sectionId: sid,
-            pctScores: [],
-            timeSum: 0,
-            questionSum: 0,
-            quizIds: new Set<string>(),
-          };
+          perStudent[key] = { studentName: name, sectionId: sid, pctScores: [], timeSum: 0, questionSum: 0, quizIds: new Set() };
         }
-
         const pct = qno > 0 ? (rawScore / qno) * 100 : 0;
         perStudent[key].pctScores.push(pct);
         perStudent[key].timeSum += secs;
@@ -197,45 +209,37 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
         if (qid) perStudent[key].quizIds.add(qid);
       }
 
-      const feats: StudentFeature[] = Object.entries(perStudent).map(([key, a])=>{
-        const avgScorePct = avg(a.pctScores);
-        const quizzesTaken = a.quizIds.size || a.pctScores.length;
-        const pace = a.questionSum > 0 ? a.timeSum / a.questionSum : 0; // seconds per question
-        return {
-          studentKey: key,
-          studentName: a.studentName || key.split("|")[0],
-          sectionId: a.sectionId,
-          avgScorePct: round(avgScorePct, 2),
-          totalQuizzes: quizzesTaken,
-          avgTimePerQuestion: round(pace, 2),
-        };
-      });
+      const feats: StudentFeature[] = Object.entries(perStudent).map(([key, a])=>({
+        studentKey: key,
+        studentName: a.studentName || key.split("|")[0],
+        sectionId: a.sectionId,
+        avgScorePct: round(avg(a.pctScores), 2),
+        totalQuizzes: a.quizIds.size || a.pctScores.length,
+        avgTimePerQuestion: round(a.questionSum > 0 ? a.timeSum / a.questionSum : 0, 2),
+      }));
 
-      if (feats.length < 2) { setCounts({students:feats.length, quizzes:quizQMap.size}); return; }
+      if (feats.length < 2) { setCounts({students:feats.length, quizzes:quizIds.length}); return; }
 
-      // F) K-means on [avgScorePct, avgTimePerQuestion]
       const X = feats.map(f=>[f.avgScorePct, f.avgTimePerQuestion]);
       const k = Math.min(3, Math.max(2, feats.length - 1));
       const { labels, centroids } = kmeans2D(X, k, 80);
       const names = nameClustersByScore(centroids);
 
-      const merged: ClusteredStudent[] = feats.map((f, i) => ({
+      setClustered(feats.map((f,i)=>({
         ...f,
         cluster: labels[i],
-        clusterLabel: names[labels[i]] || "On-Track",
-      }));
-
-      setClustered(merged);
+        clusterLabel: (names[labels[i]] as ClusteredStudent["clusterLabel"]) || "On-Track"
+      })));
       setKUsed(k);
       setCentroids(centroids);
-      setCounts({students:feats.length, quizzes:quizQMap.size});
+      setCounts({students:feats.length, quizzes:quizIds.length});
     } catch (e) {
       console.error(e);
       setClustered([]); setKUsed(null); setCentroids([]); setCounts({students:0, quizzes:0});
     } finally {
       setIsRunning(false);
     }
-  }, [selectedSection]);
+  }, [selectedSection, user?.id]);
 
   // Chart data
   const scatterData = useMemo(
@@ -282,6 +286,14 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
     }
   };
 
+  // Unique labels present in the current data (keeps legend stable & accurate)
+  const labelsInUse = useMemo(() => {
+    const set = new Set(scatterData.map(d => d.label));
+    // Preserve a friendly legend order
+    const order = ["High Achievers", "Needs Support", "On-Track"];
+    return order.filter(l => set.has(l));
+  }, [scatterData]);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -306,21 +318,22 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
 
           <div className="h-[480px]">
             <ResponsiveContainer width="100%" height="100%">
-              {/* left margin widened; label moved outside; tickMargin added */}
-              <ScatterChart margin={{ top: 50, right: 30, left: 76, bottom: 26 }}>
+              {/* BIGGER margins + outside labels + tickMargin fix the overlap */}
+              <ScatterChart margin={{ top: 40, right: 30, left: 110, bottom: 50 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   type="number"
                   dataKey="x"
                   domain={xDomain as any}
-                  tickMargin={8}
-                  label={{ value: "Avg Score (%)", position: "insideBottom", offset: -8 }}
+                  tickMargin={12}
+                  label={{ value: "Avg Score (%)", position: "bottom", offset: 12 }}
                 />
                 <YAxis
                   type="number"
                   dataKey="y"
                   domain={yDomain as any}
-                  tickMargin={8}
+                  tickMargin={12}
+                  // position 'left' puts it outside; plenty of left margin avoids collision
                   label={{ value: "Avg Time per Question (s)", angle: -90, position: "left", offset: 0 }}
                 />
                 <Tooltip
@@ -338,12 +351,14 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
                   iconType="circle"
                   wrapperStyle={{ paddingBottom: 8 }}
                 />
-                {Array.from(new Set(scatterData.map(d=>d.cluster))).map((c, idx) => (
+
+                {/* Render one <Scatter> per LABEL, with fixed color mapping */}
+                {labelsInUse.map((label) => (
                   <Scatter
-                    key={`c-${c}`}
-                    name={clustered.find(s=>s.cluster===c)?.clusterLabel ?? `Cluster ${c+1}`}
-                    data={scatterData.filter(d=>d.cluster===c)}
-                    fill={COLORS[idx % COLORS.length]}
+                    key={`lab-${label}`}
+                    name={label}
+                    data={scatterData.filter(d => d.label === label)}
+                    fill={CLUSTER_COLORS[label] || "#999"}
                   />
                 ))}
               </ScatterChart>
@@ -359,7 +374,7 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
             <CardDescription>Actionable metrics grouped by cluster</CardDescription>
           </div>
 
-          {/* NEW: cluster filter */}
+          {/* Cluster filter */}
           <div className="flex items-center gap-2">
             <Select value={clusterFilter} onValueChange={(v:any)=>setClusterFilter(v)}>
               <SelectTrigger className="w-[220px]">
@@ -381,17 +396,17 @@ export default function StudentProgressChart({ selectedSection = "all" }: Props)
               Click <b>Run Clustering</b> to load data and compute clusters.
             </div>
           ) : (
-            visibleClusterIds.map((cid, i) => {
+            visibleClusterIds.map((cid) => {
               const rows = grouped[cid] || [];
               if (!rows.length) return null;
-              // choose color index by the *position* among visible clusters for consistency
-              const colorIdx = i % COLORS.length;
+              const label = rows[0]?.clusterLabel ?? `Cluster ${cid + 1}`;
+              const dotColor = CLUSTER_COLORS[label] || "#999";
 
               return (
                 <div key={cid} className="space-y-2">
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full" style={{ background: COLORS[colorIdx] }} />
-                    <div className="font-semibold">{rows[0]?.clusterLabel ?? `Cluster ${cid + 1}`}</div>
+                    <div className="w-3 h-3 rounded-full" style={{ background: dotColor }} />
+                    <div className="font-semibold">{label}</div>
                     <Badge variant="secondary">{rows.length} student(s)</Badge>
                   </div>
 

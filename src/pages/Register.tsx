@@ -49,7 +49,7 @@ const Register = () => {
       if (error) {
         toast.error(error.message);
       } else {
-        toast.success("Registration successful! Please check your email to confirm your account.");
+        toast.success("Registration successful!");
       }
     } catch (err) {
       console.error('Registration error:', err);

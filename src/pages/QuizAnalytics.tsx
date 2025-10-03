@@ -34,6 +34,18 @@ const wordSet = (s: string) =>
   );
 
 const QuizAnalytics = () => {
+
+  // top
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+    const [isSocketLive, setIsSocketLive] = useState(true);
+    useEffect(() => {
+      const on = () => setIsOnline(true);
+      const off = () => setIsOnline(false);
+      window.addEventListener("online", on);
+      window.addEventListener("offline", off);
+      return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    }, []);
+
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [quizTitle, setQuizTitle] = useState('');
@@ -55,6 +67,22 @@ const QuizAnalytics = () => {
       }
     >
   >({});
+
+  useEffect(() => {
+  const socket = getSocket();
+  socketRef.current = socket;
+
+  const onDisconnect = () => setIsSocketLive(false);
+  const onConnect = () => setIsSocketLive(true);
+
+  socket.on("connect", onConnect);
+  socket.on("disconnect", onDisconnect);
+
+  return () => {
+    socket.off("connect", onConnect);
+    socket.off("disconnect", onDisconnect);
+  };
+}, []);
 
   useEffect(() => {
     const load = async () => {
@@ -263,6 +291,12 @@ const QuizAnalytics = () => {
   return (
     <div className="min-h-screen bg-muted/20 p-4">
       <div className="max-w-5xl mx-auto pt-8 space-y-6">
+        {/* Offline/socket banner INSIDE the render */}
+        {(!isOnline || !isSocketLive) && (
+          <div className="mb-4 rounded-md bg-amber-100 text-amber-900 px-4 py-2 border border-amber-300">
+            Live updates paused ({!isOnline ? "offline" : "socket disconnected"}). Using backup polling…
+          </div>
+        )}
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold">Live Quiz Results</h1>

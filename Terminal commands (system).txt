@@ -15,7 +15,7 @@ npx supabase gen types typescript --project-id tjmtqmwhkqrbscxsegjl --schema pub
 
 (For Github commits)
 git add -A
-git commit -m "Added Class Section Table in the Database"
+git commit -m "Your commit title"
 git push
 
 (if no upstream set)

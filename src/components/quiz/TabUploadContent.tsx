@@ -54,18 +54,15 @@ const TabUploadContent = ({
     (async () => {
       setLoadingSections(true);
       try {
-        const { data, error } = await (supabase as any)
-          .from('class_sections')
-          .select('code')
-          .order('code', { ascending: true });
-        if (!isMounted) return;
-        if (error) {
-          console.error('Failed to load class sections:', error);
-          toast.error('Could not load class sections. Please try again later.');
-          return;
-        }
-        const codes = Array.isArray(data) ? data.map((r: any) => String(r.code)) : [];
-        setAvailableSections(codes);
+        const { data, error } = await supabase.rpc('get_all_section_codes');
+          if (error) {
+            console.warn('RPC get_all_section_codes failed, falling back to direct select:', error.message);
+            const fallback = await supabase.from('class_sections').select('code').order('code', { ascending: true });
+            if (fallback.error) throw fallback.error;
+            setAvailableSections((fallback.data ?? []).map((r: any) => String(r.code)));
+          } else {
+            setAvailableSections((data ?? []).map((r: any) => String(r.code)));
+          }
       } finally {
         setLoadingSections(false);
       }

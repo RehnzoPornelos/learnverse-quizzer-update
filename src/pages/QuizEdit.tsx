@@ -133,7 +133,7 @@ const QuizEdit = () => {
 
       // 2) Normalize questions and save quiz metadata
       const dbQuestions = questions.map((q: any, index: number) => {
-        let dbType = q.type === 'multiple_choice' ? 'mcq' : q.type;
+        let dbType = q.type === 'mcq' ? 'multiple_choice' : q.type;
         const allowed = ['mcq', 'true_false', 'short_answer'];
         if (!allowed.includes(dbType)) dbType = 'mcq';
 

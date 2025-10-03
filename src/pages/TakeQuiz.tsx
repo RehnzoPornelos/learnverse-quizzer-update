@@ -7,6 +7,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { motion } from 'framer-motion';
 import { getSocket } from '@/lib/socket';
 import { useAuth } from '@/context/AuthContext';
+import { enqueueSubmission, installOnlineFlush } from "@/lib/offlineQueue";
 
 // UI components for dialogs and textarea
 import {
@@ -23,6 +24,30 @@ import { Textarea } from '@/components/ui/textarea';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+// Safe UUID v4 (uses crypto if available, falls back to Math.random pattern)
+const genUuidV4 = (): string => {
+  try {
+    // modern browsers
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const buf = new Uint8Array(16);
+      crypto.getRandomValues(buf);
+      buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
+      buf[8] = (buf[8] & 0x3f) | 0x80; // variant 10
+      const hex = [...buf].map(b => b.toString(16).padStart(2, "0")).join("");
+      return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+    }
+  } catch {}
+  // last-resort fallback (still RFC format)
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
 
 // ------- helpers: seeded shuffle so order is stable per student -------
 function hashToInt(s: string): number {
@@ -72,6 +97,7 @@ async function gradeShortAnswerViaBackend(questionId: string, student: string): 
 const MAX_LEAVE_WARNINGS = 3;
 
 const TakeQuiz = () => {
+
   const hasSavedRef = useRef(false);
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -105,6 +131,57 @@ const TakeQuiz = () => {
   const [showScore, setShowScore] = useState(false);
   const [scoreResult, setScoreResult] = useState<{ total: number; correct: number }>({ total: 0, correct: 0 });
   const [showTimeUp, setShowTimeUp] = useState(false);
+
+    // ---- TakeQuiz.tsx additions ----
+  const attemptKeyRef = useRef<string>("");
+
+  // auto-flush queued submissions when window regains focus/online
+  useEffect(() => {
+    installOnlineFlush();
+  }, []);
+
+  // online/offline status for banner
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!id || !username) return;
+    // section might not be known immediately; include it when available
+    const sec = section?.id || "nosection";
+    attemptKeyRef.current = `lv.attempt.${id}.${username}.${sec}`;
+  }, [id, username, section?.id]);
+
+  // Load saved progress
+  useEffect(() => {
+    const key = attemptKeyRef.current;
+    if (!key) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "{}");
+      if (saved.quizData && !quizData) setQuizData(saved.quizData);
+      if (typeof saved.currentQuestionIndex === "number") setCurrentQuestionIndex(saved.currentQuestionIndex);
+      if (saved.answers) setAnswers(saved.answers);
+      if (saved.questionTimeSpent) setQuestionTimeSpent(saved.questionTimeSpent);
+    } catch {}
+  }, [quizData]); // run once when quizData first available
+
+  // Save progress on changes (throttle lightly if you want)
+  useEffect(() => {
+    const key = attemptKeyRef.current;
+    if (!key) return;
+    const snapshot = {
+      quizData, answers, currentQuestionIndex, questionTimeSpent
+    };
+    try { localStorage.setItem(key, JSON.stringify(snapshot)); } catch {}
+  }, [quizData, answers, currentQuestionIndex, questionTimeSpent]);
 
   useEffect(() => {
     if (!location.state?.username) {
@@ -342,8 +419,19 @@ const TakeQuiz = () => {
         const existing = prev[questionId] ?? 0;
         return { ...prev, [questionId]: existing + elapsed };
       });
-      setQuestionStartTimes((prev) => ({ ...prev, [questionId]: Date.now() }));
+      // stop this question's timer since we're leaving it
+      setQuestionStartTimes((prev) => {
+        const { [questionId]: _, ...rest } = prev;
+        return rest;
+      });
     }
+  };
+
+  const goToIndex = (newIdx: number) => {
+    if (!quizData?.questions?.length) return;
+    const current = quizData.questions[currentQuestionIndex];
+    if (current) recordTimeForQuestion(current.id);
+    setCurrentQuestionIndex(newIdx);
   };
 
   const currentQuestion = quizData?.questions?.[currentQuestionIndex];
@@ -359,19 +447,13 @@ const TakeQuiz = () => {
 
   const handleNextQuestion = () => {
     if (currentQuestionIndex < quizData.questions.length - 1) {
-      if (quizData?.questions?.[currentQuestionIndex]) {
-        recordTimeForQuestion(quizData.questions[currentQuestionIndex].id);
-      }
-      setCurrentQuestionIndex(currentQuestionIndex + 1);
+      goToIndex(currentQuestionIndex + 1);
     }
   };
 
   const handlePreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-      if (quizData?.questions?.[currentQuestionIndex]) {
-        recordTimeForQuestion(quizData.questions[currentQuestionIndex].id);
-      }
-      setCurrentQuestionIndex(currentQuestionIndex - 1);
+      goToIndex(currentQuestionIndex - 1);
     }
   };
 
@@ -386,225 +468,273 @@ const TakeQuiz = () => {
     finalizeQuiz();
   };
 
-  // attempt_no helpers
-  async function getNextAttemptNo(quizId: string, studentNameNorm: string) {
-    try {
-      const { data } = await supabase
-        .from('analytics_student_performance')
-        .select('attempt_no')
-        .eq('quiz_id', quizId)
-        .eq('student_name_norm', studentNameNorm)
-        .order('attempt_no', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const last = data?.attempt_no;
-      const n = Number(last);
-      return Number.isFinite(n) ? n + 1 : 1;
-    } catch {
-      return 1;
+// ---- Finalize / persist ----
+const finalizeQuiz = async () => {
+  try {
+    if (hasSavedRef.current) {
+      console.info('[finalizeQuiz] already saved – ignoring duplicate call');
+      return;
     }
-  }
-  async function hasTakenInSection(
-    quizId: string,
-    sectionId: string | null,
-    studentNameNorm: string
-  ): Promise<boolean> {
-    try {
-      const base = supabase
-        .from('analytics_student_performance')
-        .select('id')
-        .eq('quiz_id', quizId)
-        .eq('student_name_norm', studentNameNorm)
-        .limit(1);
-      const { data } = sectionId ? await base.eq('section_id', sectionId) : await base.is('section_id', null);
-      return !!data && data.length > 0;
-    } catch {
-      return false;
-    }
-  }
+    hasSavedRef.current = true;
+    isFinalizingRef.current = true;
 
-  // ---- Finalize / persist ----
-  const finalizeQuiz = async () => {
-    try {
-      if (hasSavedRef.current) {
-        console.info('[finalizeQuiz] already saved – ignoring duplicate call');
+    if (!quizData || !quizData.questions?.length) {
+      console.warn('[finalizeQuiz] Missing quizData, retrying small wait…');
+      const ready = await waitForQuizReady(3000);
+      if (!ready) {
+        toast.error('Cannot finish: quiz data missing.');
         return;
       }
-      hasSavedRef.current = true;
-      isFinalizingRef.current = true;
+    }
 
-      if (!quizData || !quizData.questions?.length) {
-        console.warn('[finalizeQuiz] Missing quizData, retrying small wait…');
-        const ready = await waitForQuizReady(3000);
-        if (!ready) {
-          toast.error('Cannot finish: quiz data missing.');
-          return;
+    const quizId: string | undefined =
+      (quizData as any)?.id ?? (typeof id === 'string' ? id : undefined);
+    const UUID_RX =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!quizId || !UUID_RX.test(quizId)) {
+      console.error('[finalizeQuiz] invalid quizId:', quizId);
+      toast.error('Invalid quiz id. Please re-open the quiz and try again.');
+      return;
+    }
+
+    // capture time on current question
+    const updatedTimes: Record<string, number> = { ...questionTimeSpent };
+    const currentQ = quizData.questions[currentQuestionIndex];
+    if (currentQ) {
+      const start = questionStartTimes[currentQ.id];
+      if (start != null) {
+        const elapsed = (Date.now() - start) / 1000;
+        const existing = updatedTimes[currentQ.id] ?? 0;
+        updatedTimes[currentQ.id] = existing + elapsed;
+      }
+    }
+
+    const total = quizData.questions.length;
+    let correct = 0;
+
+    // ----- resolve sectionIdToSave (MUST NOT BE NULL) -----
+    let sectionIdToSave: string | null = section?.id ?? null;
+    try {
+      if (!sectionIdToSave) {
+        const { data: qs, error: qsErr } = await supabase
+          .from('quiz_sections')
+          .select('section_id')
+          .eq('quiz_id', quizId);
+        if (!qsErr && Array.isArray(qs) && qs.length === 1) {
+          sectionIdToSave = qs[0].section_id as string;
         }
       }
+    } catch {}
+    if (!sectionIdToSave) {
+      console.warn('[finalizeQuiz] section not linked/visible – cannot save');
+      toast.error('Cannot submit: your class section is not linked to this quiz.');
+      return;
+    }
 
-      const quizId: string | undefined =
-        (quizData as any)?.id ?? (typeof id === 'string' ? id : undefined);
-      const UUID_RX =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!quizId || !UUID_RX.test(quizId)) {
-        console.error('[finalizeQuiz] invalid quizId:', quizId);
-        toast.error('Invalid quiz id. Please re-open the quiz and try again.');
-        return;
+    const responseRows: any[] = [];
+    for (const q of quizData.questions) {
+      const studentAnswer = answers[q.id];
+      const correctAnswer = (q as any).correctAnswer;
+
+      let isCorrect = false;
+
+      if (q.type === 'multiple_choice') {
+        isCorrect =
+          studentAnswer !== undefined &&
+          correctAnswer != null &&
+          studentAnswer === correctAnswer;
+      } else if (q.type === 'true_false') {
+        const sa = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
+        const ca = (typeof correctAnswer === 'string' ? correctAnswer : String(correctAnswer)).trim().toLowerCase();
+        isCorrect = !!sa && !!ca && sa === ca;
+      } else {
+        const sa = typeof studentAnswer === 'string' ? studentAnswer : '';
+        isCorrect = sa ? await gradeShortAnswerViaBackend(q.id, sa) : false;
       }
 
-      // capture time on current question
-      const updatedTimes: Record<string, number> = { ...questionTimeSpent };
-      const currentQ = quizData.questions[currentQuestionIndex];
-      if (currentQ) {
-        const start = questionStartTimes[currentQ.id];
-        if (start != null) {
-          const elapsed = (Date.now() - start) / 1000;
-          const existing = updatedTimes[currentQ.id] ?? 0;
-          updatedTimes[currentQ.id] = existing + elapsed;
-        }
+      if (isCorrect) correct++;
+
+      const timeSpent = updatedTimes[q.id];
+      const time_spent_seconds =
+        typeof timeSpent === 'number' && Number.isFinite(timeSpent)
+          ? Math.round(timeSpent)
+          : 0; // ALWAYS an integer (NOT NULL in schema)
+
+      let selected_option_jsonb: any = '""'; // jsonb default ""
+      if (q.type === 'multiple_choice') {
+        const opt = (q.options || []).find((o: any) => o.id === studentAnswer);
+        if (opt && typeof opt.text === 'string') selected_option_jsonb = opt.text;
+      } else if (q.type === 'true_false') {
+        const v = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
+        if (v === 'true' || v === 'false') selected_option_jsonb = v;
       }
 
-      const total = quizData.questions.length;
-      let correct = 0;
+      const text_answer: string = q.type === 'essay'
+        ? String(answers[q.id] ?? '')
+        : '';
 
-      const responseRows: any[] = [];
-      for (const q of quizData.questions) {
-        const studentAnswer = answers[q.id];
-        const correctAnswer = (q as any).correctAnswer;
+      responseRows.push({
+        quiz_id: quizId,
+        question_id: q.id,
+        section_id: sectionIdToSave,             // NOT NULL
+        student_name: username ?? 'Unknown',
+        answered_at: new Date().toISOString(),
+        time_spent_seconds,
+        is_correct: isCorrect,
+        selected_option: selected_option_jsonb,   // jsonb-compatible scalar
+        text_answer,                              // text NOT NULL (we send empty when not essay)
+      });
+    }
 
-        let isCorrect = false;
+    // Show score immediately
+    setQuestionTimeSpent(updatedTimes);
+    setScoreResult({ total, correct });
+    setShowScore(true);
+    setShowAutoSubmitDialog(false);
 
-        if (q.type === 'multiple_choice') {
-          isCorrect =
-            studentAnswer !== undefined &&
-            correctAnswer != null &&
-            studentAnswer === correctAnswer;
-        } else if (q.type === 'true_false') {
-          const sa = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
-          const ca = (typeof correctAnswer === 'string' ? correctAnswer : String(correctAnswer)).trim().toLowerCase();
-          isCorrect = !!sa && !!ca && sa === ca;
-        } else {
-          const sa = typeof studentAnswer === 'string' ? studentAnswer : '';
-          isCorrect = sa ? await gradeShortAnswerViaBackend(q.id, sa) : false;
-        }
-
-        if (isCorrect) correct++;
-
-        const timeSpent = updatedTimes[q.id];
-        const time_spent_seconds =
-          typeof timeSpent === 'number' && Number.isFinite(timeSpent)
-            ? Math.round(timeSpent)
-            : null;
-
-        let selected_option: string | null = null;
-        if (q.type === 'multiple_choice') {
-          const opt = (q.options || []).find((o: any) => o.id === studentAnswer);
-          selected_option = opt ? String(opt.text) : null;
-        } else if (q.type === 'true_false') {
-          const v = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
-          if (v === 'true' || v === 'false') selected_option = v;
-        }
-
-        responseRows.push({
-          quiz_id: quizId,
-          question_id: q.id,
-          section_id: section?.id ?? null,
-          student_name: username ?? null,
-          answered_at: new Date().toISOString(),
-          time_spent_seconds,
-          is_correct: isCorrect,
-          selected_option,
-          text_answer: q.type === 'essay' ? (answers[q.id] ?? '') : null,
+    // Best-effort notify
+    try {
+      if (quizCode) {
+        const socket = socketRef.current || getSocket();
+        socket.emit('student_finished', {
+          room: quizCode,
+          student_id: null,
+          name: username,
+          correct,
+          total,
+          section_id: sectionIdToSave,
+          ts: Date.now(),
         });
+        setTimeout(() => {
+          try { socket.disconnect(); } catch {}
+        }, 300);
       }
+    } catch {}
 
-      // Show score immediately
-      setQuestionTimeSpent(updatedTimes);
-      setScoreResult({ total, correct });
-      setShowScore(true);
-      setShowAutoSubmitDialog(false);
+// ---------- OFFLINE-TOLERANT PERSIST ----------
+// Build payloads first (so catch() can queue them if needed)
+const totalTimeSeconds = Math.round(
+  Object.values(updatedTimes).reduce(
+    (a, b) => a + (Number.isFinite(b as number) ? (b as number) : 0),
+    0
+  )
+);
 
-      // Best-effort notify
-      try {
-        if (quizCode) {
-          const socket = socketRef.current || getSocket();
-          socket.emit('student_finished', {
-            room: quizCode,
-            student_id: null,
-            name: username,
-            correct,
-            total,
-            section_id: section?.id ?? null,
-            ts: Date.now(),
-          });
-          setTimeout(() => {
-            try { socket.disconnect(); } catch {}
-          }, 300);
-        }
-      } catch {}
+// 1) Pre-generate the performance ID so we can FK responses to it (online/offline-safe)
+const perfId = genUuidV4();
 
-      // Persist (non-blocking to user)
-      try {
-        if (section?.id) {
-          const { data: qsRow, error: qsErr } = await (supabase as any)
-            .from('quiz_sections')
-            .select('section_id')
-            .eq('quiz_id', quizId)
-            .eq('section_id', section.id)
-            .maybeSingle();
-        if (qsErr || !qsRow) {
-            console.warn('[finalizeQuiz] section check failed or not allowed', qsErr);
-            return;
-          }
-        }
+// 2) Performance row (WITH id; DB will accept client-supplied UUID)
+const perfInsert = {
+  id: perfId,
+  quiz_id: quizId,
+  score: Number(correct),
+  completion_time_seconds: totalTimeSeconds,
+  student_name: username ?? "Unknown",
+  section_id: sectionIdToSave as string,
+  // attempt_no omitted (defaults to 1) — adjust if you later add per-student attempt logic
+};
 
-        const totalTimeSeconds = Object.values(updatedTimes).reduce(
-          (acc: number, v: any) => acc + (typeof v === 'number' ? v : 0),
-          0
-        );
+// 3) Responses with the FK set to perfId
+const responsesWithPerf = responseRows.map(r => ({
+  ...r,
+  student_perf_id: perfId
+}));
 
-        const studentPerfId = (window.crypto?.randomUUID?.() || undefined) as string | undefined;
-        if (!studentPerfId) return;
+// ✅ FAST-PATH: if offline, enqueue & toast immediately
+if (!navigator.onLine) {
+  enqueueSubmission({
+    kind: "quiz_submission_v1",
+    quizId,
+    perfInsert,
+    responsesTemplate: responsesWithPerf,
+  });
+  toast.warning("You’re offline. Your quiz is saved locally and will auto-submit once you’re back online.");
+  try { localStorage.removeItem(attemptKeyRef.current); } catch {}
+  return;   // avoid running the online branch
+}
 
-        const studentNameNorm = (username ?? '').trim().toLowerCase();
-        const already = await hasTakenInSection(quizId, section?.id ?? null, studentNameNorm);
-        if (already) return;
+try {
+  // Guard: ensure quiz is linked to section to avoid FK/RLS issues
+  const { data: linkRow, error: linkErr } = await supabase
+    .from("quiz_sections")
+    .select("quiz_id, section_id")
+    .eq("quiz_id", quizId)
+    .eq("section_id", sectionIdToSave)
+    .maybeSingle();
+  if (linkErr || !linkRow) {
+    toast.error("Cannot submit: your class is not allowed for this quiz.");
+    return;
+  }
 
-        const attemptNo = await getNextAttemptNo(quizId, studentNameNorm);
+  const doPersist = async () => {
+    // Insert perf WITH known id
+    const { error: perfErr } = await supabase
+      .from("analytics_student_performance")
+      .insert(perfInsert); // no .select() needed since we already have perfId
+    if (perfErr) throw perfErr;
 
-        const perfPayload = {
-          id: studentPerfId,
-          quiz_id: quizId,
-          score: Number(correct),
-          completion_time_seconds: Math.round(totalTimeSeconds),
-          student_name: username ?? 'Unknown',
-          attempt_no: attemptNo,
-          section_id: section?.id ?? null,
-        };
-
-        const { error: perfErr } = await (supabase as any)
-          .from('analytics_student_performance')
-          .insert([perfPayload], { returning: 'minimal' });
-        if (perfErr) {
-          console.error('[finalizeQuiz] analytics insert failed:', perfErr);
-          return;
-        }
-
-        const rowsWithPerf = responseRows.map((r) => ({ ...r, student_perf_id: studentPerfId }));
-        if (!rowsWithPerf.length) return;
-
-        const { error: respErr } = await (supabase as any)
-          .from('quiz_responses')
-          .insert(rowsWithPerf, { returning: 'minimal' });
-        if (respErr) console.error('[finalizeQuiz] responses insert failed:', respErr);
-      } catch (netErr) {
-        console.error('[finalizeQuiz] network/db error:', netErr);
-      }
-    } catch (fatal) {
-      console.error('[finalizeQuiz] unexpected failure:', fatal);
-      toast.error('Something went wrong while finishing the quiz.');
-    }
+    // Insert responses, already carrying student_perf_id
+    const { error: respErr } = await supabase
+      .from("quiz_responses")
+      .insert(responsesWithPerf);
+    if (respErr) throw respErr;
   };
+
+    // Attempt #1
+    try {
+      await doPersist();
+    } catch (errFirst: any) {
+      const msg = String(errFirst?.message || "").toLowerCase();
+      const status = errFirst?.status ?? errFirst?.code;
+      const isAuth = status === 401 || status === 403 || msg.includes("invalid refresh token");
+
+      if (isAuth) {
+        try { await supabase.auth.signOut(); } catch {}
+        await doPersist(); // retry once after re-auth
+      } else {
+        throw errFirst;
+      }
+    }
+
+    // ✅ Online success toast
+    toast.success("Your quiz was submitted successfully!");
+
+    // Success: clear local snapshot
+    try { localStorage.removeItem(attemptKeyRef.current); } catch {}
+
+} catch (netErr: any) {
+  // Queue an offline-safe copy that preserves the same FK
+  enqueueSubmission({
+    kind: "quiz_submission_v1",
+    quizId,
+    // keep the perf id so responses link on sync
+    perfInsert,           // includes id: perfId
+    responsesTemplate: responsesWithPerf,
+  });
+
+  const msg = String(netErr?.message || "").toLowerCase();
+  const status = netErr?.status ?? netErr?.code;
+  const isAuth = status === 401 || status === 403 || msg.includes("invalid refresh token");
+  const isNetwork = !navigator.onLine || msg.includes("failed to fetch") || msg.includes("network");
+
+  if (isAuth) {
+    toast.warning("Saved locally. Re-login and I’ll auto-sync your quiz.");
+  } else if (isNetwork) {
+    // ✅ Offline success toast
+    toast.warning("You’re offline. Your quiz is saved locally and will auto-submit once you’re back online.");
+  } else {
+    console.error("[finalizeQuiz] persist error:", netErr);
+    toast.warning("Saved locally due to a server error. I’ll auto-sync soon.");
+  }
+}
+
+
+
+  } catch (fatal) {
+    console.error('[finalizeQuiz] unexpected failure:', fatal);
+    toast.error('Something went wrong while finishing the quiz.');
+  }
+};
 
   const handleTimeUp = () => setShowTimeUp(true);
 
@@ -666,6 +796,7 @@ const TakeQuiz = () => {
   }
 
   return (
+
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -689,6 +820,13 @@ const TakeQuiz = () => {
             <ThemeToggle />
           </div>
         </div>
+
+        {/* Offline banner */}
+        {!isOnline && (
+          <div className="mb-4 rounded-md bg-amber-100 text-amber-900 px-4 py-2 border border-amber-300">
+            You’re offline. Your answers are saved locally and will auto-sync when connection returns.
+          </div>
+        )}
 
         {/* Progress */}
         <div className="mb-4 flex items-center justify-between">
@@ -715,7 +853,7 @@ const TakeQuiz = () => {
               <button
                 key={q.id}
                 className={`w-8 h-8 rounded-md flex items-center justify-center text-sm font-medium cursor-pointer transition-all duration-200 hover:scale-105 ${colorClass}`}
-                onClick={() => setCurrentQuestionIndex(idx)}
+                onClick={() => goToIndex(idx)}
               >
                 {idx + 1}
               </button>

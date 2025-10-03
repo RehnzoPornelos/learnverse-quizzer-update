@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -31,16 +31,15 @@ const QuizWaiting = () => {
   const [isStudent, setIsStudent] = useState(false);
   const [studentName, setStudentName] = useState('');
   const [quizStatus, setQuizStatus] = useState<'waiting' | 'started' | 'ended'>('waiting');
+  const [ownerId, setOwnerId] = useState<string | null>(null);
+  const canHost = useMemo(() => Boolean(user?.id && ownerId && user!.id === ownerId), [user?.id, ownerId]);
 
   const socketRef = useRef<any>(null);
   const hasEmittedJoinRef = useRef(false);
   const hasEmittedOpenRef = useRef(false);
   const startGuardRef = useRef(false);
 
-  // the active section for this quiz session
   const [section, setSection] = useState<SectionLite | null>(null);
-
-  // ----- helpers -----
 
   const inferSingleSection = async (quizId: string) => {
     try {
@@ -49,17 +48,13 @@ const QuizWaiting = () => {
         .select('section_id, class_sections ( id, code )')
         .eq('quiz_id', quizId);
 
-      if (error) {
-        console.warn('[QuizWaiting] inferSingleSection error:', error);
-        return null;
-      }
+      if (error) return null;
       if (Array.isArray(rows) && rows.length === 1) {
         const cs = rows[0]?.class_sections as { id: string; code?: string } | null;
         if (cs?.id) return { id: cs.id, code: cs.code };
       }
       return null;
-    } catch (e) {
-      console.warn('[QuizWaiting] inferSingleSection exception:', e);
+    } catch {
       return null;
     }
   };
@@ -68,16 +63,17 @@ const QuizWaiting = () => {
     try {
       const { data: quiz, error } = await supabase
         .from('quizzes')
-        .select('*')
+        .select('id, title, invitation_code, user_id, published, is_code_active')
         .eq('id', quizId)
         .single();
 
       if (error) throw error;
 
       setQuizTitle(quiz.title);
-      setQuizCode(quiz.invitation_code);
+      setQuizCode(quiz.invitation_code || '');
+      setOwnerId(quiz.user_id || null);
 
-      return quiz as { title: string; invitation_code: string };
+      return quiz as { title: string; invitation_code: string | null; user_id: string | null };
     } catch (err) {
       console.error('[QuizWaiting] Failed to load quiz basics:', err);
       toast.error('Failed to load quiz details.');
@@ -85,83 +81,89 @@ const QuizWaiting = () => {
     }
   };
 
-  // ----- mount: set role, basic state, socket wiring -----
-
+  // ---------- FIRST GUARD: decide role / redirect ----------
   useEffect(() => {
     if (!id) return;
 
-    const isStudentFlag = Boolean(location.state?.isStudent);
-    setIsStudent(isStudentFlag);
-    setStudentName(location.state?.username || '');
+    const cameWithStudentState = Boolean(location.state?.isStudent);
+    const cameWithJoinCode = Boolean(location.state?.joinCode);
 
-    if (location.state?.quizTitle) setQuizTitle(location.state.quizTitle);
-    if (location.state?.joinCode) setQuizCode(location.state.joinCode);
-
-    // section provided by previous page (host or student)
-    if (location.state?.section) setSection(location.state.section as SectionLite);
-
-    // Always fetch basic quiz info if missing code/title
-    if (!location.state?.quizTitle || !location.state?.joinCode) {
-      fetchQuizBasics(id);
+    // If not logged-in and there is no student payload, kick them to /join
+    if (!user && !cameWithStudentState) {
+      navigate('/join', { replace: true });
+      return;
     }
 
-    // Students may arrive without section; if the quiz has exactly one, infer it
-    (async () => {
+    // If they are not logged in but came from /join with student payload -> student
+    if (!user && cameWithStudentState) {
+      setIsStudent(true);
+    }
+
+    // If they are logged in but explicitly marked as student (edge case), honor it
+    if (user && cameWithStudentState) {
+      setIsStudent(true);
+    }
+
+    setStudentName(location.state?.username || '');
+    if (location.state?.quizTitle) setQuizTitle(location.state.quizTitle);
+    if (location.state?.joinCode) setQuizCode(location.state.joinCode);
+    if (location.state?.section) setSection(location.state.section as SectionLite);
+
+    // Always fetch quiz (to know owner)
+    fetchQuizBasics(id).then(async () => {
+      // Students may arrive without section; infer when exactly one is linked
       if (!location.state?.section) {
         const inferred = await inferSingleSection(id);
         if (inferred) setSection(inferred);
       }
-    })();
+    });
 
     const socket = getSocket();
     socketRef.current = socket;
 
     const roomCode = location.state?.joinCode || quizCode;
 
-    // student joins the room (once)
-    if (isStudentFlag && roomCode) {
+    // student joins (once)
+    if ((cameWithStudentState || isStudent) && roomCode) {
       socket.emit('student_join', {
         room: roomCode,
         student_id: user?.id ?? null,
         name: location.state?.username || 'Student',
-        section_id: location.state?.section?.id || section?.id || null, // send if we know it
+        section_id: location.state?.section?.id || section?.id || null,
       });
       hasEmittedJoinRef.current = true;
     }
 
-    // host opens the room (once) if they came with a joinCode
-    if (!isStudentFlag && location.state?.joinCode && roomCode) {
-      socket.emit('host_open_quiz', {
-        room: roomCode,
-        quiz_id: id,
-        title: location.state?.quizTitle || quizTitle,
-        section_id: location.state?.section?.id || section?.id || null,
-      });
-      hasEmittedOpenRef.current = true;
-    }
+    // host opens the room (once) — ONLY if canHost will be true later
+    // (we don't know canHost yet on very first render; we’ll re-emit later when canHost resolves)
+    return () => {
+      socket.off('server:student-joined');
+      socket.off('server:client-left');
+      socket.off('server:quiz-start');
+      socket.off('server:quiz-end');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
-    // ---- socket listeners ----
-    socket.on('server:student-joined', (payload: any) => {
-      if (Array.isArray(payload?.participants)) {
-        setParticipants(payload.participants);
-      }
-    });
+  // Re-wire listeners after socketRef is set & role is known
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
 
-    socket.on('server:client-left', (payload: any) => {
-      if (Array.isArray(payload?.participants)) {
-        setParticipants(payload.participants);
-      }
-    });
-
-    socket.on('server:quiz-start', (payload: any) => {
-      // payload may include section info from host_start
+    // listeners
+    const onJoined = (payload: any) => {
+      if (Array.isArray(payload?.participants)) setParticipants(payload.participants);
+    };
+    const onLeft = (payload: any) => {
+      if (Array.isArray(payload?.participants)) setParticipants(payload.participants);
+    };
+    const onStart = (payload: any) => {
       if (payload?.section) setSection(payload.section);
       if (payload?.section_id && !payload?.section) {
         setSection((prev) => prev ?? { id: payload.section_id });
       }
-
       setQuizStatus('started');
-      if (isStudentFlag) {
+      if (isStudent) {
         navigate(`/quiz/take/${id}`, {
           state: {
             username: location.state?.username || studentName,
@@ -172,29 +174,34 @@ const QuizWaiting = () => {
       } else {
         navigate(`/quiz/analytics/${id}`);
       }
-    });
-
-    socket.on('server:quiz-end', () => {
+    };
+    const onEnd = () => {
       setQuizStatus('ended');
       toast.success('Quiz ended');
       navigate('/dashboard');
-    });
+    };
+
+    socket.on('server:student-joined', onJoined);
+    socket.on('server:client-left', onLeft);
+    socket.on('server:quiz-start', onStart);
+    socket.on('server:quiz-end', onEnd);
 
     return () => {
-      socket.off('server:student-joined');
-      socket.off('server:client-left');
-      socket.off('server:quiz-start');
-      socket.off('server:quiz-end');
+      socket.off('server:student-joined', onJoined);
+      socket.off('server:client-left', onLeft);
+      socket.off('server:quiz-start', onStart);
+      socket.off('server:quiz-end', onEnd);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, location]);
+  }, [isStudent, section?.id, studentName, user?.id]);
 
-  // late join/open when quizCode arrives async (guarded)
+  // When we finally know quizCode/title/section & canHost => emit host_open_quiz once
   useEffect(() => {
-    if (!socketRef.current) return;
+    const socket = socketRef.current;
+    if (!socket || !quizCode) return;
 
-    if (isStudent && quizCode && !hasEmittedJoinRef.current) {
-      socketRef.current.emit('student_join', {
+    if (isStudent && !hasEmittedJoinRef.current) {
+      socket.emit('student_join', {
         room: quizCode,
         student_id: user?.id ?? null,
         name: studentName || 'Student',
@@ -203,8 +210,8 @@ const QuizWaiting = () => {
       hasEmittedJoinRef.current = true;
     }
 
-    if (!isStudent && quizCode && !hasEmittedOpenRef.current) {
-      socketRef.current.emit('host_open_quiz', {
+    if (canHost && !isStudent && !hasEmittedOpenRef.current) {
+      socket.emit('host_open_quiz', {
         room: quizCode,
         quiz_id: id,
         title: quizTitle,
@@ -213,11 +220,11 @@ const QuizWaiting = () => {
       hasEmittedOpenRef.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quizCode, quizTitle, isStudent, studentName, section?.id, user?.id]);
+  }, [quizCode, quizTitle, isStudent, studentName, section?.id, user?.id, canHost]);
 
-  // ----- actions -----
-
+  // ----- actions (host only) -----
   const handleStartQuiz = async () => {
+    if (!canHost) return; // extra guard
     if (startGuardRef.current) return;
     startGuardRef.current = true;
     setIsStarting(true);
@@ -228,18 +235,15 @@ const QuizWaiting = () => {
         return;
       }
       if (!section?.id) {
-        // last-ditch inference for hosts if they forgot to pass section and exactly one exists
         const inferred = await inferSingleSection(id!);
-        if (inferred) {
-          setSection(inferred);
-        } else {
+        if (inferred) setSection(inferred);
+        else {
           toast.error('Please choose a section before starting the quiz.');
           return;
         }
       }
 
       const socket = socketRef.current || getSocket();
-      // include the section so students can receive it and carry it to /take
       socket.emit('host_start', {
         room: quizCode,
         starts_at: Date.now(),
@@ -260,6 +264,7 @@ const QuizWaiting = () => {
   };
 
   const handleCancelQuiz = async () => {
+    if (!canHost) return; // extra guard
     setIsCancelling(true);
     try {
       const socket = socketRef.current || getSocket();
@@ -274,8 +279,6 @@ const QuizWaiting = () => {
       setShowConfirmCancel(false);
     }
   };
-
-  // ----- UI -----
 
   return (
     <motion.div
@@ -328,7 +331,8 @@ const QuizWaiting = () => {
             </div>
           </div>
 
-          {isStudent ? (
+          {/* Student view */}
+          {(!canHost || isStudent) ? (
             <div className="text-center p-6 border rounded-lg bg-muted/50">
               <Clock className="h-10 w-10 mx-auto text-muted-foreground mb-2" />
               <h3 className="text-lg font-medium mb-1">Waiting for the professor to start the quiz</h3>
@@ -337,6 +341,7 @@ const QuizWaiting = () => {
               </p>
             </div>
           ) : (
+            // Host view (only owner)
             <div className="flex flex-col sm:flex-row gap-4 justify-end">
               <Button
                 variant="outline"
