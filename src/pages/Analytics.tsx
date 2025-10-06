@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import Navbar from '@/components/layout/Navbar';
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChartIcon, LineChartIcon, Users, TrendingUp, RefreshCw } from 'lucide-react';
+import { BarChartIcon, Lightbulb, Users, RefreshCw, Sparkle } from 'lucide-react';
 import PerformanceOverview from '@/components/analytics/PerformanceOverview';
 import StudentProgressChart from '@/components/analytics/StudentProgressChart';
 import QuizDifficultyAnalysis from '@/components/analytics/QuizDifficultyAnalysis';
@@ -36,7 +36,13 @@ const Analytics = () => {
   useEffect(() => {
     window.scrollTo(0, 0);
     const tab = searchParams.get('tab');
-    if (tab) setActiveTab(tab === 'questions' ? 'overview' : tab);
+    if (tab) {
+      // Legacy aliases → current tab ids
+      let canonical = tab;
+      if (canonical === 'questions') canonical = 'overview';
+      if (canonical === 'predictions') canonical = 'recommendations';
+      setActiveTab(canonical);
+    }
     bootstrap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -72,12 +78,10 @@ const Analytics = () => {
           .in("quiz_id", quizIds);
 
         if (aspErr) {
-          // RLS will return 0 results (not 404). 404 only happens if the table/view/RPC is missing.
           console.warn("analytics_student_performance check:", aspErr);
           setHasAnalyticsData(false);
         } else {
-          // supabase head-count pattern returns count in .count
-          setHasAnalyticsData((aspRows as any)?.length !== 0 || true); // defensive; count not exposed in this select
+          setHasAnalyticsData((aspRows as any)?.length !== 0 || true);
         }
       } else {
         setHasAnalyticsData(false);
@@ -223,7 +227,7 @@ const Analytics = () => {
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-            <TabsList className="grid grid-cols-4 md:w-[600px]">
+            <TabsList className="grid grid-cols-4 md:w-[700px]">
               <TabsTrigger value="overview">
                 <BarChartIcon className="h-4 w-4 mr-2" />
                 Overview
@@ -232,13 +236,13 @@ const Analytics = () => {
                 <Users className="h-4 w-4 mr-2" />
                 Students
               </TabsTrigger>
-              <TabsTrigger value="trends">
-                <LineChartIcon className="h-4 w-4 mr-2" />
-                Trends
+              <TabsTrigger value="insights">
+                <Lightbulb className="h-4 w-4 mr-2" />
+                Insights
               </TabsTrigger>
-              <TabsTrigger value="predictions">
-                <TrendingUp className="h-4 w-4 mr-2" />
-                Predictions
+              <TabsTrigger value="recommendations">
+                <Sparkle  className="h-4 w-4 mr-2" />
+                Recommendations
               </TabsTrigger>
             </TabsList>
 
@@ -255,12 +259,14 @@ const Analytics = () => {
               <StudentProgressChart selectedSection={selectedSectionId ?? "all"} />
             </TabsContent>
 
-            <TabsContent value="trends" className="space-y-6">
-              <QuizDifficultyAnalysis hasAnalyticsData={hasAnalyticsData} />
+            <TabsContent value="insights" className="space-y-6">
+              {/* Insights content goes here */}
+              <QuizDifficultyAnalysis />
             </TabsContent>
 
-            <TabsContent value="predictions" className="space-y-6">
-              <PredictiveModeling hasAnalyticsData={hasAnalyticsData} />
+            <TabsContent value="recommendations" className="space-y-6">
+              {/* Keep using your Recommendations component; it can render recs */}
+              <PredictiveModeling />
             </TabsContent>
           </Tabs>
         </div>
