@@ -50,13 +50,6 @@ const Hero = () => {
           transition={{ duration: 0.8, delay: 0.6 }}
           className="mt-12 sm:mt-16"
         >
-          <div className="overflow-hidden glass-card">
-            <img
-              src="https://images.unsplash.com/photo-1581089781785-603411fa81e5?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
-              alt="LearnVerse Dashboard"
-              className="w-full shadow-lg rounded-xl"
-            />
-          </div>
         </motion.div>
       </div>
     </div>

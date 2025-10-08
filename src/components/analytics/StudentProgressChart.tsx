@@ -813,8 +813,7 @@ export default function StudentProgressChart({
         <CardHeader>
           <CardTitle>K-Means (k = 4): Student Performance (True 3D)</CardTitle>
           <CardDescription>
-            X = Avg Score (%), Y = Avg Time per Question (s), Z = Quizzes Taken.
-            Labels follow your quadrant rules.
+            X = Avg Score (%)  |  Y = Avg Time per Question (s)  |  Z = Quizzes Taken.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
