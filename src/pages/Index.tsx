@@ -35,7 +35,7 @@ const Index = () => {
               </div>
 
               <div>
-                <h3 className="mb-4 text-lg font-medium">Developer</h3>
+                <h3 className="mb-4 text-lg font-medium">Developers</h3>
                 <ul className="space-y-2 text-sm">
                   <li>
                     <div className="flex items-center gap-2">
@@ -113,7 +113,7 @@ const Index = () => {
               </div>
 
               <div>
-                <h3 className="mb-4 text-lg font-medium">Contact</h3>
+                <h3 className="mb-4 text-lg font-medium">Contacts</h3>
                 <ul className="space-y-2 text-sm">
                   <li>
                     <a

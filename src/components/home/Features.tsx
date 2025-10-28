@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { BookOpen, Brain, Award, Clock, FileText, GraduationCap, LineChart, Upload, Users, Zap } from 'lucide-react';
+import { BookOpen, ShieldCheck, FileText, GraduationCap, LineChart, Upload, Users } from 'lucide-react';
 
 const features = [
   {
@@ -8,29 +8,14 @@ const features = [
     icon: Upload,
   },
   {
-    name: 'Offline Accessibility',
-    description: 'Students can take quizzes without an internet connection and sync results later.',
-    icon: Zap,
-  },
-  {
     name: 'Performance Analytics',
     description: 'Track student progress and identify knowledge gaps with detailed analytics.',
     icon: LineChart,
   },
   {
-    name: 'Instant Grading',
-    description: 'AI instantly grades quizzes and provides personalized feedback.',
-    icon: Clock,
-  },
-  {
-    name: 'Adaptive Learning',
-    description: 'AI personalizes quiz difficulty based on students\' previous performance.',
-    icon: Brain,
-  },
-  {
-    name: 'Certificate Generator',
-    description: 'Automatically issue certificates upon successful quiz completion.',
-    icon: Award,
+    name: 'Anti Cheating Measures',
+    description: 'The site automatically detects tabs or window leaving, preventing cheating.',
+    icon: ShieldCheck,
   },
   {
     name: 'Comprehensive Dashboard',
@@ -39,7 +24,7 @@ const features = [
   },
   {
     name: 'Student Progress Tracking',
-    description: 'Students can view scores, track achievements, and receive study recommendations.',
+    description: 'Professors can view scores, track student progress, and receive recommendations.',
     icon: GraduationCap,
   },
   {
@@ -115,8 +100,8 @@ const Features = () => {
             <Users className="w-12 h-12 mx-auto mb-4 text-primary" />
             <h3 className="text-2xl font-medium">Ready to transform your teaching?</h3>
             <p className="mt-4 text-muted-foreground">
-              Join thousands of professors using LearnVerse to create engaging assessments
-              and personalized learning experiences for their students.
+              Join LearnVerse to create engaging assessments
+              and personalized learning experiences for your students!
             </p>
             <div className="mt-6">
           

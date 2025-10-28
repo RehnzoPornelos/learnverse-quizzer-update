@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
-import Navbar from '@/components/layout/Navbar';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { supabase } from '@/integrations/supabase/client';
+import Navbar from "@/components/layout/Navbar";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Card,
   CardContent,
@@ -15,17 +15,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { BookOpen, Loader2, ArrowLeft } from 'lucide-react';
+import { BookOpen, Loader2, ArrowLeft } from "lucide-react";
 
 const ForgotPassword = () => {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
 
   // Frontend base URL for redirects (dev: 8080, lab: 172.16.28.128:8080)
+  // pick the password site first (8080), then fall back to backend or current origin
   const APP_URL =
-    import.meta.env.VITE_SITE_URL /* e.g., http://localhost:8080 or http://172.16.28.128:8080 */ ||
+    import.meta.env.VITE_PASSWORD_URL ||
+    import.meta.env.VITE_BACKEND_URL ||
     window.location.origin;
+
+  // ensure no trailing slash, then add /reset-password
+  const base = APP_URL.replace(/\/$/, "");
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +48,7 @@ const ForgotPassword = () => {
         setEmailSent(true);
       }
     } catch (err) {
-      console.error('Reset password error:', err);
+      console.error("Reset password error:", err);
       toast.error("Failed to send reset email. Please try again.");
     } finally {
       setIsLoading(false);
@@ -52,8 +57,11 @@ const ForgotPassword = () => {
 
   return (
     <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.5 }} className="min-h-screen bg-muted/10"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.5 }}
+      className="min-h-screen bg-muted/10"
     >
       <Navbar />
       <main className="pt-32 pb-16">
@@ -64,19 +72,19 @@ const ForgotPassword = () => {
             <p className="text-muted-foreground text-center mt-2">
               {emailSent
                 ? "Check your email for reset instructions"
-                : "Enter your email to receive a password reset link"
-              }
+                : "Enter your email to receive a password reset link"}
             </p>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>{emailSent ? "Email Sent" : "Reset Password"}</CardTitle>
+              <CardTitle>
+                {emailSent ? "Email Sent" : "Reset Password"}
+              </CardTitle>
               <CardDescription>
                 {emailSent
                   ? "We've sent you a link to reset your password. Check your email and follow the instructions."
-                  : "Enter the email address associated with your account and we'll send you a link to reset your password."
-                }
+                  : "Enter the email address associated with your account and we'll send you a link to reset your password."}
               </CardDescription>
             </CardHeader>
 
@@ -97,7 +105,14 @@ const ForgotPassword = () => {
                 </CardContent>
                 <CardFooter className="flex flex-col">
                   <Button className="w-full" disabled={isLoading} type="submit">
-                    {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending...</>) : 'Send Reset Link'}
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      "Send Reset Link"
+                    )}
                   </Button>
                 </CardFooter>
               </form>
@@ -105,14 +120,21 @@ const ForgotPassword = () => {
 
             {emailSent && (
               <CardFooter>
-                <Button variant="outline" className="w-full" onClick={() => setEmailSent(false)}>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setEmailSent(false)}
+                >
                   Send Another Email
                 </Button>
               </CardFooter>
             )}
 
             <CardFooter className="pt-0">
-              <Link to="/login" className="flex items-center text-sm text-primary hover:underline mx-auto">
+              <Link
+                to="/login"
+                className="flex items-center text-sm text-primary hover:underline mx-auto"
+              >
                 <ArrowLeft className="mr-1 h-4 w-4" /> Back to Login
               </Link>
             </CardFooter>

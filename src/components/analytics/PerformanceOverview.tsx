@@ -1,29 +1,47 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface QuizScore {
-  name: string;     // quiz title
+  name: string; // quiz title
   avgScore: number; // % (0..100)
   maxScore: number; // 100
 }
 
 interface PerformanceData {
-  name: string;     // quiz title
+  name: string; // quiz title
   excellent: number; // >= 90
-  good: number;      // 80–89
-  average: number;   // 70–79
-  poor: number;      // < 70
+  good: number; // 80–89
+  average: number; // 70–79
+  poor: number; // < 70
 }
 
 interface PerformanceOverviewProps {
   professorId: string | null; // owner of the quizzes
-  sectionId: string | null;   // only this section's data (null = all sections)
+  sectionId: string | null; // only this section's data (null = all sections)
   hasAnalyticsData?: boolean;
 }
 
-const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProps) => {
+const PerformanceOverview = ({
+  professorId,
+  sectionId,
+}: PerformanceOverviewProps) => {
   const [quizScoreData, setQuizScoreData] = useState<QuizScore[]>([]);
   const [performanceData, setPerformanceData] = useState<PerformanceData[]>([]);
   const [completionRate, setCompletionRate] = useState<number>(0);
@@ -144,22 +162,26 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
         }
 
         // Chart: Average Quiz Scores (percent)
-        const scores: QuizScore[] = Object.entries(byQuiz).map(([qid, agg]) => ({
-          name: titleById.get(qid) || `Quiz ${qid.slice(0, 4)}`,
-          avgScore: agg.n ? agg.sumPct / agg.n : 0,
-          maxScore: 100,
-        }));
+        const scores: QuizScore[] = Object.entries(byQuiz).map(
+          ([qid, agg]) => ({
+            name: titleById.get(qid) || `Quiz ${qid.slice(0, 4)}`,
+            avgScore: agg.n ? agg.sumPct / agg.n : 0,
+            maxScore: 100,
+          })
+        );
         scores.sort((a, b) => a.name.localeCompare(b.name));
         setQuizScoreData(scores);
 
         // Chart: Performance Distribution (percent buckets)
-        const perf: PerformanceData[] = Object.entries(byQuiz).map(([qid, agg]) => ({
-          name: titleById.get(qid) || `Quiz ${qid.slice(0, 4)}`,
-          excellent: agg.buckets.ex,
-          good: agg.buckets.g,
-          average: agg.buckets.a,
-          poor: agg.buckets.p,
-        }));
+        const perf: PerformanceData[] = Object.entries(byQuiz).map(
+          ([qid, agg]) => ({
+            name: titleById.get(qid) || `Quiz ${qid.slice(0, 4)}`,
+            excellent: agg.buckets.ex,
+            good: agg.buckets.g,
+            average: agg.buckets.a,
+            poor: agg.buckets.p,
+          })
+        );
         perf.sort((a, b) => a.name.localeCompare(b.name));
         setPerformanceData(perf);
 
@@ -181,9 +203,12 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
           maxParticipants ? (agg.uniq.size / maxParticipants) * 100 : 0
         );
         const meanCompletion = perQuizCompletion.length
-          ? perQuizCompletion.reduce((s, v) => s + v, 0) / perQuizCompletion.length
+          ? perQuizCompletion.reduce((s, v) => s + v, 0) /
+            perQuizCompletion.length
           : 0;
-        setCompletionRate(Number.isFinite(meanCompletion) ? Math.round(meanCompletion) : 0);
+        setCompletionRate(
+          Number.isFinite(meanCompletion) ? Math.round(meanCompletion) : 0
+        );
       } catch (e) {
         console.error("PerformanceOverview error:", e);
         setQuizScoreData([]);
@@ -244,7 +269,9 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
             <CardDescription>100% completion rate (per-quiz)</CardDescription>
           </CardHeader>
           <CardContent className="pt-0">
-            <div className="text-3xl font-bold">{Math.round(completionRate)}%</div>
+            <div className="text-3xl font-bold">
+              {Math.round(completionRate)}%
+            </div>
             <p className="text-xs text-muted-foreground mt-1">
               Averaged across quizzes in scope
             </p>
@@ -258,7 +285,9 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
           </CardHeader>
           <CardContent className="pt-0">
             <div className="text-3xl font-bold">{avgScore.toFixed(2)}%</div>
-            <p className="text-xs text-muted-foreground mt-1">Section filter applied</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Section filter applied
+            </p>
           </CardContent>
         </Card>
 
@@ -269,7 +298,9 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
           </CardHeader>
           <CardContent className="pt-0">
             <div className="text-3xl font-bold">{activeStudents}</div>
-            <p className="text-xs text-muted-foreground mt-1">In current scope</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              In current scope
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -279,18 +310,41 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
         <Card>
           <CardHeader>
             <CardTitle>Average Quiz Scores</CardTitle>
-            <CardDescription>Performance across different quizzes</CardDescription>
+            <CardDescription>
+              Performance across different quizzes
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={quizScoreData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <BarChart
+                  data={quizScoreData}
+                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                  barCategoryGap={20} // ← spacing between categories
+                >
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
+                  <XAxis
+                    dataKey="name"
+                    interval={0} // ← show every label
+                    angle={-15} // ← slight tilt
+                    textAnchor="end"
+                    height={36} // ← room for the angled text
+                    tick={{ fontSize: 12 }}
+                  />
+
                   <YAxis domain={[0, 100]} />
-                  <Tooltip formatter={(value: number) => value.toFixed(2)} cursor={false} />
+                  <Tooltip
+                    formatter={(value: number) => [
+                      `${value.toFixed(2)}%`,
+                      "Average Score",
+                    ]}
+                  />
                   <Legend />
-                  <Bar dataKey="avgScore" name="Average Score (%)" fill="#8884d8" />
+                  <Bar
+                    dataKey="avgScore"
+                    name="Average Score (%)"
+                    fill="#8884d8"
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -305,16 +359,40 @@ const PerformanceOverview = ({ professorId, sectionId }: PerformanceOverviewProp
           <CardContent>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={performanceData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <BarChart
+                  data={performanceData}
+                  margin={{ top: 20, right: 16, left: 12, bottom: 24 }}
+                  barCategoryGap={20}
+                >
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
+                  <XAxis
+                    dataKey="name"
+                    interval={0} // show every quiz label
+                    angle={-15} // slight tilt for long titles
+                    textAnchor="end"
+                    height={36} // room for the angled text
+                    tick={{ fontSize: 12 }}
+                  />
+
                   <YAxis allowDecimals={false} />
                   <Tooltip cursor={false} />
                   <Legend />
-                  <Bar dataKey="excellent" name="Excellent (≥90%)" fill="#8884d8" />
+                  <Bar
+                    dataKey="excellent"
+                    name="Excellent (≥90%)"
+                    fill="#8884d8"
+                  />
                   <Bar dataKey="good" name="Good (80–89%)" fill="#82ca9d" />
-                  <Bar dataKey="average" name="Average (70–79%)" fill="#ffc658" />
-                  <Bar dataKey="poor" name="Needs Improvement (<70%)" fill="#ff8042" />
+                  <Bar
+                    dataKey="average"
+                    name="Average (70–79%)"
+                    fill="#ffc658"
+                  />
+                  <Bar
+                    dataKey="poor"
+                    name="Needs Improvement (<70%)"
+                    fill="#ff8042"
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -1,6 +1,8 @@
 MAIN PC COMMANDS
+
 (ADDRESS FOR MAIN PC - add on .env.local)
-VITE_BACKEND_URL=http://172.16.28.128:8000
+VITE_BACKEND_URL=http://172.16.20.32:8000
+VITE_PASSWORD_URL=http://172.16.20.32:8080
 
 cd backend
 uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload
@@ -8,7 +10,7 @@ uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload
 (New terminal)
 npm run dev
 
-(New terminal)
+(For supabase edits)
 npm i -D supabase
 npx supabase login
 npx supabase gen types typescript --project-id tjmtqmwhkqrbscxsegjl --schema public > src/integrations/supabase/types.ts

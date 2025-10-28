@@ -1,11 +1,12 @@
 // StudentProgressChart.tsx
 // - True 3D chart via Plotly (rotate/zoom)
-// - k = 4 K-Means on [Avg Score %, Avg Time per Q (s), Total Quizzes] with z-score scaling
-// - Display labels defined by quadrants you requested:
-//     High Achiever  = high score & fast time
-//     Guesser        = low score  & fast time
-//     Struggler      = low score  & slow time
-//     On Track       = high score & slow time
+// - k = 5 K-Means on [Avg Score %, Avg Time per Q (s), Total Quizzes] with z‑score scaling
+// - Semantic labels defined by score bands and cohort median pacing:
+//     High Achiever         = score ≥ 90% and time < median
+//     Slow High Achiever    = score ≥ 90% and time ≥ median
+//     Guesser               = score < 75% and time < median
+//     Struggler             = score < 75% and time ≥ median
+//     On Track              = otherwise (moderate)
 // - Section filter + details table kept
 
 import { useCallback, useMemo, useState } from "react";
@@ -57,7 +58,18 @@ type StudentFeature = {
   avgTimePerQuestion: number; // seconds
 };
 
-type DisplayLabel = "High Achiever" | "Guesser" | "Struggler" | "On Track";
+// Extend DisplayLabel to include five semantic categories.  We now have
+// a distinct label for students who achieve high scores but take longer
+// than the cohort median to complete questions (“Slow High Achiever”).
+// Existing labels remain: High Achiever, Guesser, Struggler, and
+// On‑Track.  These correspond to performance quadrants and are used
+// throughout the component for colouring and filtering.
+type DisplayLabel =
+  | "High Achiever"
+  | "Slow High Achiever"
+  | "Guesser"
+  | "Struggler"
+  | "On Track";
 
 type ClusteredStudent = StudentFeature & {
   cluster: number; // numeric K-Means cluster (not shown)
@@ -66,9 +78,13 @@ type ClusteredStudent = StudentFeature & {
 
 type Props = { selectedSection?: string | null };
 
-// ----- Colors for your 4 labels -----
+// ----- Colours for your 5 semantic labels -----
+// We assign a distinct colour to each label to aid visual separation
+// in both the table and the 3D scatter plot.  Feel free to tweak
+// colours to better fit your branding or accessibility guidelines.
 const LABEL_COLORS: Record<DisplayLabel, string> = {
   "High Achiever": "#00A86B", // green
+  "Slow High Achiever": "#1E90FF", // blue
   Guesser: "#A855F7", // purple
   Struggler: "#EF4444", // red
   "On Track": "#F59E0B", // amber
@@ -195,18 +211,24 @@ function quantile(xs: number[], q: number) {
   return a[lo] * (1 - h) + a[hi] * h;
 }
 
-// Label by absolute thresholds (NOT z-scores)
-function labelByThresholds(
+// ----- Label assignment based on score and pacing -----
+// Assigns a semantic label to a student given their average score (in %),
+// average time per question (in seconds) and the cohort’s median time.
+// High achievers score at least 90%.  Those scoring >=90% but taking
+// longer than the median are “Slow High Achievers”.  Students scoring
+// below 75% are divided into “Guessers” (fast but low accuracy) and
+// “Strugglers” (slow and low accuracy).  Everyone else is “On Track”.
+function semanticLabel(
   scorePct: number,
   timePerQ: number,
-  scoreHi: number,
-  timeFast: number
+  medianTime: number
 ): DisplayLabel {
-  const highScore = scorePct >= scoreHi;
-  const fastTime = timePerQ <= timeFast;
-  if (highScore && fastTime) return "High Achiever";
-  if (!highScore && fastTime) return "Guesser";
-  if (!highScore && !fastTime) return "Struggler";
+  if (scorePct >= 90) {
+    return timePerQ < medianTime ? "High Achiever" : "Slow High Achiever";
+  }
+  if (scorePct < 75) {
+    return timePerQ < medianTime ? "Guesser" : "Struggler";
+  }
   return "On Track";
 }
 
@@ -695,22 +717,16 @@ export default function StudentProgressChart({
         return;
       }
 
-      // ----- Robust thresholds for labeling -----
-      const scores = feats
-        .map((f) => f.avgScorePct)
-        .filter((n) => Number.isFinite(n));
+      // ----- Cohort quartiles for pacing -----
       const times = feats
         .map((f) => f.avgTimePerQuestion)
         .filter((n) => Number.isFinite(n));
 
-      let SCORE_HI = 75; // default domain threshold (%)
-      let TIME_FAST = 25; // default domain threshold (seconds per question)
-
-      // If we have a decent sample, switch to quantile-based thresholds
-      if (feats.length >= 20) {
-        SCORE_HI = quantile(scores, 0.6); // 60th percentile = "high score"
-        TIME_FAST = quantile(times, 0.4); // 40th percentile = "fast time"
-      }
+      // Compute the cohort’s median (Q2) of the raw average times.  This
+      // median defines the boundary between “fast” and “slow” pacing in
+      // the semanticLabel() function.  We only compute Q2 since Q1 and
+      // Q3 are not currently used for labelling.
+      const q2Time = quantile(times, 0.5);
 
       // ===== 3D K-Means on standardized [score, time, quizzes] =====
       const Xraw = feats.map((f) => [
@@ -721,20 +737,25 @@ export default function StudentProgressChart({
       const std = fitStd(Xraw);
       const X = transformStd(Xraw, std);
 
-      const kDesired = 4;
+      // We set k to 5 to capture more nuanced clusters.  When the number
+      // of data points is too small, k is clamped to ensure sensible
+      // behaviour (at least two clusters and at most n-1).  See below.
+      const kDesired = 5;
       const k = Math.min(kDesired, Math.max(2, feats.length - 1));
       const { labels, centroids } = kmeansND(X, k);
       setKUsed(k);
       setCentroids(centroids);
       setCounts({ students: feats.length, quizzes: quizIds.length });
 
-      // quadrant labels by absolute/robust thresholds (NOT z-scores)
+      // Assign semantic labels based on median pacing and absolute score bands.
+      // See semanticLabel() for rules.  Note that labeling is independent of
+      // the K-Means clustering; clusters partition the data in feature space
+      // but do not determine the final label.
       const labeled: ClusteredStudent[] = feats.map((f, i) => {
-        const displayLabel = labelByThresholds(
+        const displayLabel = semanticLabel(
           f.avgScorePct,
           f.avgTimePerQuestion,
-          SCORE_HI,
-          TIME_FAST
+          q2Time
         );
         return { ...f, cluster: labels[i], displayLabel };
       });
@@ -769,17 +790,22 @@ export default function StudentProgressChart({
   const traces = useMemo(() => {
     const byLabel: Record<DisplayLabel, ClusteredStudent[]> = {
       "High Achiever": [],
+      "Slow High Achiever": [],
       Guesser: [],
       Struggler: [],
       "On Track": [],
     };
     for (const r of rows) byLabel[r.displayLabel].push(r);
 
+    // Define an ordering for the legend.  This array controls the
+    // sequencing of traces in the plot and can be adjusted to suit
+    // pedagogical priorities.
     const labelsOrder: DisplayLabel[] = [
       "High Achiever",
+      "Slow High Achiever",
+      "On Track",
       "Guesser",
       "Struggler",
-      "On Track",
     ];
     return labelsOrder
       .filter((l) => byLabel[l].length > 0)
@@ -811,9 +837,11 @@ export default function StudentProgressChart({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>K-Means (k = 4): Student Performance (True 3D)</CardTitle>
+          <CardTitle>
+            K-Means Student Performance
+          </CardTitle>
           <CardDescription>
-            X = Avg Score (%)  |  Y = Avg Time per Question (s)  |  Z = Quizzes Taken.
+            X-Axis = Avg Score (%)  |  Y-Axis = Avg Time per Question (s)  |  Z-Axis = Quizzes Taken.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -947,7 +975,7 @@ export default function StudentProgressChart({
         <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <CardTitle>Cluster Details</CardTitle>
-            <CardDescription>Grouped by your four labels</CardDescription>
+            <CardDescription>Grouped by your five labels</CardDescription>
           </div>
 
           <div className="flex w-full md:w-auto items-center gap-3">
@@ -968,6 +996,7 @@ export default function StudentProgressChart({
               <SelectContent>
                 <SelectItem value="ALL">All labels</SelectItem>
                 <SelectItem value="High Achiever">High Achiever</SelectItem>
+                <SelectItem value="Slow High Achiever">Slow High Achiever</SelectItem>
                 <SelectItem value="Guesser">Guesser</SelectItem>
                 <SelectItem value="Struggler">Struggler</SelectItem>
                 <SelectItem value="On Track">On Track</SelectItem>

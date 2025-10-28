@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -25,6 +25,8 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
+  ReferenceLine,
+  Brush,
 } from "recharts";
 import { Upload, FileSpreadsheet, LightbulbIcon } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast"; // shadcn toast (if available)
@@ -52,6 +54,8 @@ interface HardQuestionRec {
   quizTitle: string;
   accuracy: number;
   avgTime: number;
+  avgTimeMin?: number;
+  aboveMedian?: boolean;
 }
 interface RecommendationItem {
   title: string;
@@ -140,9 +144,55 @@ const Recommendations = () => {
   const [recommendations, setRecommendations] = useState<RecommendationItem[]>(
     []
   );
-  const [scoreTrend, setScoreTrend] = useState<
-    { month: string; avgScore: number }[]
-  >([]);
+  // For average quiz score trends, we store an array of objects keyed by
+  // quiz title and section names.  Each object has the shape
+  // { quiz: string, [sectionName: string]: number }.  We also track
+  // which section names appear for use in the chart legend.
+  const [scoreTrend, setScoreTrend] = useState<any[]>([]);
+  const [trendSections, setTrendSections] = useState<string[]>([]);
+
+  // Distinct, accessible palette for section series
+  const TREND_PALETTE = [
+    "#2563EB", // blue-600
+    "#10B981", // emerald-500
+    "#F59E0B", // amber-500
+    "#EF4444", // red-500
+    "#8B5CF6", // violet-500
+    "#0EA5E9", // sky-500
+    "#84CC16", // lime-500
+    "#EC4899", // pink-500
+  ];
+
+  const trendColorMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    trendSections.forEach((sec, i) => {
+      m[sec] = TREND_PALETTE[i % TREND_PALETTE.length];
+    });
+    return m;
+  }, [trendSections]);
+
+  // Quiz “spread” (best vs worst section) — great at surfacing gaps
+  const quizSpreads = useMemo(() => {
+    return scoreTrend
+      .map((row) => {
+        const entries = trendSections.map((sec) => ({
+          sec,
+          pct: Number(row[sec] ?? 0),
+        }));
+        entries.sort((a, b) => a.pct - b.pct);
+        const worst = entries[0];
+        const best = entries[entries.length - 1];
+        return {
+          quiz: row.quiz as string,
+          spread: Math.round((best.pct - worst.pct) * 10) / 10,
+          bestSec: best.sec,
+          bestPct: best.pct,
+          worstSec: worst.sec,
+          worstPct: worst.pct,
+        };
+      })
+      .sort((a, b) => b.spread - a.spread);
+  }, [scoreTrend, trendSections]);
 
   // Import state
   const [importMeta, setImportMeta] = useState<{
@@ -154,15 +204,10 @@ const Recommendations = () => {
     perSection: Array<{
       section: string;
       worstQuizzes: Array<{ quiz: string; avgPct: number }>;
+      onTrack: Array<{ quiz: string; avgPct: number }>;
       commendations: Array<{ quiz: string; avgPct: number }>;
     }>;
-    crossSectionFlags: Array<{
-      quiz: string;
-      worstSection: string;
-      bestSection: string;
-      gapPct: number;
-      hint: string;
-    }>;
+    // Removed crossSectionFlags as cross-section gaps are no longer displayed
     strugglers: Array<{
       section: string;
       student: string;
@@ -177,7 +222,6 @@ const Recommendations = () => {
     }>;
   }>({
     perSection: [],
-    crossSectionFlags: [],
     strugglers: [],
     guessersOneTime: [],
     guessersMulti: [],
@@ -245,9 +289,9 @@ const Recommendations = () => {
       setHardQuestionsRec([]);
       setRecommendations([]);
       setScoreTrend([]);
+      setTrendSections([]);
       setPrescriptions({
         perSection: [],
-        crossSectionFlags: [],
         strugglers: [],
         guessersOneTime: [],
         guessersMulti: [],
@@ -325,23 +369,19 @@ const Recommendations = () => {
       }
     );
 
-    // thresholds (robust)
-    const scores = features.map((f) => f.avgScorePct).filter(Number.isFinite);
+    // ----- Cohort median for pacing -----
+    // Compute the median of average time per question to distinguish
+    // between “fast” and “slow” students.  We also use absolute score
+    // thresholds to assign semantic labels similar to the Student
+    // Progress chart.  High achievers score ≥90%; low performers are <75%.
     const times = features
       .map((f) => f.avgTimePerQuestion)
       .filter(Number.isFinite);
-    let SCORE_HI = 75,
-      TIME_FAST = 25;
-    if (features.length >= 20) {
-      SCORE_HI = quantile(scores, 0.6);
-      TIME_FAST = quantile(times, 0.4);
-    }
-    const labelByThresholds = (score: number, time: number) => {
-      const hi = score >= SCORE_HI,
-        fast = time <= TIME_FAST;
-      if (hi && fast) return "High Achiever";
-      if (!hi && fast) return "Guesser";
-      if (!hi && !fast) return "Struggler";
+    const medianTime = quantile(times, 0.5);
+    const semanticLabel = (score: number, time: number) => {
+      if (score >= 90)
+        return time < medianTime ? "High Achiever" : "Slow High Achiever";
+      if (score < 75) return time < medianTime ? "Guesser" : "Struggler";
       return "On Track";
     };
 
@@ -361,16 +401,12 @@ const Recommendations = () => {
         })
       : features.map((f) => ({
           key: f.studentKey,
-          label: labelByThresholds(f.avgScorePct, f.avgTimePerQuestion),
+          label: semanticLabel(f.avgScorePct, f.avgTimePerQuestion),
           quizzesTaken: f.totalQuizzes,
         }));
 
-    const counts: Record<string, number> = {
-      "High Achiever": 0,
-      Guesser: 0,
-      Struggler: 0,
-      "On Track": 0,
-    };
+    // count students per performance label dynamically (accounts for new “Slow High Achiever”)
+    const counts: Record<string, number> = {};
     clusteringRows.forEach((r) => {
       counts[r.label] = (counts[r.label] || 0) + 1;
     });
@@ -405,19 +441,33 @@ const Recommendations = () => {
           attempts,
         };
       })
+      .filter((q) => q.avgScore <= 80)
       .sort((a, b) => a.avgScore - b.avgScore);
     setHardQuizzes(quizzesRank.slice(0, Math.min(3, quizzesRank.length)));
 
     // hard questions from summary
-    const qStats: HardQuestionRec[] = (imported.qsummary || [])
+    const qSummary = imported.qsummary || [];
+    // compute median of avg_time_spent_seconds to determine high pacing
+    const timeList = qSummary
+      .map((r) => Number(r.avg_time_spent_seconds) || 0)
+      .filter((n) => Number.isFinite(n));
+    const medianQTime = quantile(timeList, 0.5);
+    const qStats: HardQuestionRec[] = qSummary
       .filter((r) => r.attempts >= 3)
-      .map((r) => ({
-        question: r.text,
-        quizTitle: qTitle[r.quiz_id] || "Unknown",
-        accuracy: Math.round((Number(r.accuracy_percent) || 0) * 100) / 100,
-        avgTime:
-          Math.round((Number(r.avg_time_spent_seconds) || 0) * 100) / 100,
-      }))
+      .map((r) => {
+        const acc = Math.round((Number(r.accuracy_percent) || 0) * 100) / 100;
+        const avgSec = Number(r.avg_time_spent_seconds) || 0;
+        const avgSecRounded = Math.round(avgSec * 100) / 100;
+        const avgMin = avgSec / 60;
+        return {
+          question: r.text,
+          quizTitle: qTitle[r.quiz_id] || "Unknown",
+          accuracy: acc,
+          avgTime: avgSecRounded,
+          avgTimeMin: avgMin,
+          aboveMedian: avgSec > medianQTime,
+        };
+      })
       .sort((a, b) =>
         a.accuracy === b.accuracy
           ? b.avgTime - a.avgTime
@@ -425,42 +475,60 @@ const Recommendations = () => {
       );
     setHardQuestionsRec(qStats.slice(0, Math.min(5, qStats.length)));
 
-    // trend (by month)
-    const trendMap: Record<
+    // trend (by quiz and section) — compute average score per quiz per section
+    const quizSectionMap: Record<
       string,
-      { scoreSum: number; count: number; denom: number }
+      Record<string, { sum: number; denom: number }>
     > = {};
     (perf || []).forEach((r) => {
       if (!publishedIds.has(r.quiz_id)) return;
-      const d = new Date(r.created_at);
-      if (isNaN(d.getTime())) return;
-      const key =
-        d.toLocaleString("default", { month: "short" }) +
-        " " +
-        (d.getFullYear() + "").slice(-2);
-      trendMap[key] = trendMap[key] || { scoreSum: 0, count: 0, denom: 0 };
-      trendMap[key].scoreSum += Number(r.score || 0);
-      trendMap[key].count += 1;
-      trendMap[key].denom += qQuestionCount[r.quiz_id] || 0;
+      const sec = showSection(r.section_id) || "Unknown";
+      const qn = qQuestionCount[r.quiz_id] || 0;
+      const title = qTitle[r.quiz_id] || "Unknown";
+      if (!quizSectionMap[title]) quizSectionMap[title] = {};
+      if (!quizSectionMap[title][sec])
+        quizSectionMap[title][sec] = { sum: 0, denom: 0 };
+      quizSectionMap[title][sec].sum += Number(r.score || 0);
+      quizSectionMap[title][sec].denom += qn;
     });
-    const trendPoints = Object.entries(trendMap)
-      .map(([month, agg]) => {
-        const pct = agg.denom > 0 ? (agg.scoreSum / agg.denom) * 100 : 0;
-        return { month, avgScore: Math.round(pct * 10) / 10 };
-      })
-      .sort((a, b) => {
-        const parse = (k: string) => {
-          const [m, yy] = k.split(" ");
-          return {
-            y: parseInt("20" + yy),
-            m: new Date(m + " 1, 2000").getMonth(),
-          };
-        };
-        const A = parse(a.month),
-          B = parse(b.month);
-        return A.y === B.y ? A.m - B.m : A.y - B.y;
+    // gather list of sections for legend
+    const sectionsSet = new Set<string>();
+    Object.values(quizSectionMap).forEach((secMap) => {
+      Object.keys(secMap).forEach((sec) => sectionsSet.add(sec));
+    });
+    const sectionList = Array.from(sectionsSet);
+    setTrendSections(sectionList);
+    // Count participation per quiz to pick the top N most-viewed quizzes (readability)
+    const quizAttempts: Record<string, number> = {};
+    (perf || []).forEach((r) => {
+      if (!publishedIds.has(r.quiz_id)) return;
+      const title = qTitle[r.quiz_id] || "Unknown";
+      quizAttempts[title] = (quizAttempts[title] || 0) + 1;
+    });
+
+    // choose top 6 quizzes by attempts
+    const topN = 6;
+    const topQuizTitles = Object.keys(quizSectionMap)
+      .sort((a, b) => (quizAttempts[b] || 0) - (quizAttempts[a] || 0))
+      .slice(0, topN);
+
+    // build trend array (only top N quizzes)
+    const trendData = topQuizTitles.map((quizTitle) => {
+      const secMap = quizSectionMap[quizTitle] || {};
+      const obj: any = { quiz: quizTitle };
+      sectionList.forEach((sec) => {
+        const agg = secMap[sec];
+        if (agg && agg.denom > 0) {
+          const pct = (agg.sum / agg.denom) * 100;
+          obj[sec] = Math.round(pct * 10) / 10;
+        } else {
+          obj[sec] = 0;
+        }
       });
-    setScoreTrend(trendPoints);
+      return obj;
+    });
+
+    setScoreTrend(trendData);
 
     // prescriptions
     const secQuiz: Record<
@@ -486,53 +554,28 @@ const Recommendations = () => {
           return { quiz: qTitle[qid] || "Unknown", pct };
         })
         .sort((a, b) => a.pct - b.pct);
-      const worst = rows
-        .slice(0, Math.min(3, rows.length))
-        .map((r) => ({ quiz: r.quiz, avgPct: Math.round(r.pct * 100) / 100 }));
-      const best = rows
-        .slice(-3)
-        .reverse()
-        .map((r) => ({ quiz: r.quiz, avgPct: Math.round(r.pct * 100) / 100 }));
+      // categorize quizzes by performance bands
+      const weak = rows.filter((r) => r.pct <= 75);
+      const onTrack = rows.filter((r) => r.pct > 75 && r.pct <= 85);
+      const commendable = rows.filter((r) => r.pct > 85);
       return {
         section,
-        worstQuizzes: worst,
-        commendations: best.filter((x) => x.avgPct >= 80),
+        worstQuizzes: weak.map((r) => ({
+          quiz: r.quiz,
+          avgPct: Math.round(r.pct * 100) / 100,
+        })),
+        onTrack: onTrack.map((r) => ({
+          quiz: r.quiz,
+          avgPct: Math.round(r.pct * 100) / 100,
+        })),
+        commendations: commendable.map((r) => ({
+          quiz: r.quiz,
+          avgPct: Math.round(r.pct * 100) / 100,
+        })),
       };
     });
 
-    const quizBySectionPct: Record<
-      string,
-      Array<{ section: string; pct: number }>
-    > = {};
-    Object.entries(secQuiz).forEach(([sec, byQuiz]) => {
-      Object.entries(byQuiz).forEach(([qid, agg]) => {
-        const pct = agg.denom > 0 ? (agg.sum / agg.denom) * 100 : 0;
-        (quizBySectionPct[qid] ||= []).push({ section: sec, pct });
-      });
-    });
-    const crossSectionFlags: Array<{
-      quiz: string;
-      worstSection: string;
-      bestSection: string;
-      gapPct: number;
-      hint: string;
-    }> = [];
-    Object.entries(quizBySectionPct).forEach(([qid, list]) => {
-      if (list.length < 2) return;
-      const sorted = [...list].sort((a, b) => a.pct - b.pct);
-      const worst = sorted[0],
-        best = sorted[sorted.length - 1];
-      const gap = Math.round((best.pct - worst.pct) * 10) / 10;
-      if (gap >= 10) {
-        crossSectionFlags.push({
-          quiz: qTitle[qid] || "Unknown",
-          worstSection: worst.section,
-          bestSection: best.section,
-          gapPct: gap,
-          hint: `Re-teach topics for ${worst.section}; borrow materials/approach that worked in ${best.section}.`,
-        });
-      }
-    });
+    // cross-section gaps are no longer computed or displayed
 
     const strugglers: Array<{
       section: string;
@@ -552,7 +595,7 @@ const Recommendations = () => {
       const [student, section] = f.studentKey.split("|");
       const row = clusteringIndex.get(f.studentKey);
       const label =
-        row?.label ?? labelByThresholds(f.avgScorePct, f.avgTimePerQuestion);
+        row?.label ?? semanticLabel(f.avgScorePct, f.avgTimePerQuestion);
       if (label === "Struggler") {
         strugglers.push({
           section,
@@ -574,8 +617,8 @@ const Recommendations = () => {
           .map((w) => `${w.quiz} (${w.avgPct.toFixed(1)}%)`)
           .join(", ");
         recs.push({
-          title: `Re-teach weak topics in ${sec.section}`,
-          description: `These quizzes show the lowest averages in ${sec.section}: ${list}. Compare with sections where the same quiz is stronger to adapt strategies.`,
+          title: `Weak topics for ${sec.section}`,
+          description: `These quizzes have scores ≤ 75%: ${list}. Provide targeted remediation and additional practice.`,
           actionItems: [
             "Run a focused review session for the underlying topics.",
             "Share exemplars/solutions; check item clarity and distractors.",
@@ -584,13 +627,27 @@ const Recommendations = () => {
           priority: "high",
         });
       }
+      if (sec.onTrack && sec.onTrack.length) {
+        const list = sec.onTrack
+          .map((c) => `${c.quiz} (${c.avgPct.toFixed(1)}%)`)
+          .join(", ");
+        recs.push({
+          title: `On-track topics for ${sec.section}`,
+          description: `These quizzes show moderate performance: ${list}. Continue reinforcing key concepts and monitor progress.`,
+          actionItems: [
+            "Maintain current teaching strategies while addressing minor misconceptions.",
+            "Encourage practice sessions to push scores above 85%.",
+          ],
+          priority: "medium",
+        });
+      }
       if (sec.commendations.length) {
         const list = sec.commendations
           .map((c) => `${c.quiz} (${c.avgPct.toFixed(1)}%)`)
           .join(", ");
         recs.push({
-          title: `Commendation for ${sec.section}`,
-          description: `Students excelled in: ${list}. Preserve the teaching approach/materials used here.`,
+          title: `Commendable topics for ${sec.section}`,
+          description: `Students excelled in: ${list}. Preserve the teaching approach and share best practices.`,
           actionItems: [
             "Document the lesson flow/resources used.",
             "Encourage students to mentor peers in weaker areas.",
@@ -598,18 +655,6 @@ const Recommendations = () => {
           priority: "low",
         });
       }
-    });
-    crossSectionFlags.forEach((f) => {
-      recs.push({
-        title: `Cross-section gap on “${f.quiz}” (${f.gapPct}% gap)`,
-        description: `${f.worstSection} lags behind ${f.bestSection} on this quiz. ${f.hint}`,
-        actionItems: [
-          "Compare lecture pacing and pre-quiz review routines.",
-          "Audit the wording of ambiguous items; harmonize rubrics.",
-          "Create a joint review worksheet for the weakest subtopics.",
-        ],
-        priority: "medium",
-      });
     });
     if (!recs.length) {
       recs.push({
@@ -627,7 +672,6 @@ const Recommendations = () => {
     setRecommendations(recs);
     setPrescriptions({
       perSection,
-      crossSectionFlags,
       strugglers,
       guessersOneTime,
       guessersMulti,
@@ -794,29 +838,58 @@ const Recommendations = () => {
               <CardHeader>
                 <CardTitle>Average Quiz Score Trend</CardTitle>
                 <CardDescription>
-                  Historical average quiz scores across months
+                  Average score per quiz by section
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="h-80">
+                <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart
+                    <BarChart
                       data={scoreTrend}
-                      margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                      // extra top space for legend; small bottom so labels fit
+                      margin={{ top: 34, right: 16, left: 8, bottom: 22 }}
+                      barCategoryGap={18}
                     >
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip formatter={(v: any) => [`${v}%`, "Avg Score"]} />
-                      <Legend />
-                      <Line
-                        type="monotone"
-                        dataKey="avgScore"
-                        name="Average Score (%)"
-                        dot={{ r: 4 }}
-                        activeDot={{ r: 8 }}
+                      <XAxis
+                        dataKey="quiz"
+                        interval={0}
+                        angle={-15}
+                        textAnchor="end"
+                        height={36}
+                        tick={{ fontSize: 11 }}
                       />
-                    </LineChart>
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(v: any) => [`${v}%`, "Avg Score"]} />
+                      {/* Legend on top, small icons/text to avoid touching labels */}
+                      <Legend
+                        verticalAlign="top"
+                        align="right"
+                        iconSize={10}
+                        wrapperStyle={{ fontSize: 11, lineHeight: "14px" }}
+                        height={18}
+                      />
+                      {/* thresholds */}
+                      <ReferenceLine
+                        y={75}
+                        stroke="#9CA3AF"
+                        strokeDasharray="4 4"
+                      />
+                      <ReferenceLine
+                        y={85}
+                        stroke="#9CA3AF"
+                        strokeDasharray="4 4"
+                      />
+                      {trendSections.map((sec) => (
+                        <Bar
+                          key={sec}
+                          dataKey={sec}
+                          name={sec}
+                          maxBarSize={22}
+                          fill={trendColorMap[sec]}
+                        />
+                      ))}
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               </CardContent>
@@ -841,7 +914,7 @@ const Recommendations = () => {
                         <TableHead className="text-right">
                           Avg Score (%)
                         </TableHead>
-                        <TableHead className="text-right">Attempts</TableHead>
+                        <TableHead className="text-right">Students</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -851,7 +924,7 @@ const Recommendations = () => {
                             colSpan={3}
                             className="text-center text-muted-foreground"
                           >
-                            No quiz data available.
+                            No challenging quizzes identified. Congratulations!
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -898,6 +971,9 @@ const Recommendations = () => {
                         <TableHead className="text-right">
                           Avg Time (s)
                         </TableHead>
+                        <TableHead className="text-right">
+                          Avg Time (min)
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -914,12 +990,10 @@ const Recommendations = () => {
                         hardQuestionsRec.map((q, idx) => (
                           <TableRow key={idx}>
                             <TableCell
-                              className="truncate max-w-[260px]"
+                              className="min-w-[280px] whitespace-normal"
                               title={q.question}
                             >
-                              {q.question.length > 80
-                                ? `${q.question.slice(0, 77)}…`
-                                : q.question}
+                              {q.question}
                             </TableCell>
                             <TableCell
                               className="truncate max-w-[180px]"
@@ -932,6 +1006,9 @@ const Recommendations = () => {
                             </TableCell>
                             <TableCell className="text-right">
                               {q.avgTime.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {q.aboveMedian ? q.avgTimeMin?.toFixed(2) : "—"}
                             </TableCell>
                           </TableRow>
                         ))
@@ -1012,7 +1089,7 @@ const Recommendations = () => {
               <CardHeader>
                 <CardTitle>Per-Section: Quizzes to Re-teach</CardTitle>
                 <CardDescription>
-                  Lowest average quizzes per section
+                  Quizzes with averages ≤ 75% per section
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1063,7 +1140,7 @@ const Recommendations = () => {
               <CardHeader>
                 <CardTitle>Per-Section: Commendations</CardTitle>
                 <CardDescription>
-                  High-performing quizzes (≥80%)
+                  High-performing quizzes (85% higher)
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1111,54 +1188,7 @@ const Recommendations = () => {
             </Card>
           </div>
 
-          {/* Cross-section flags */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Cross-Section Gaps</CardTitle>
-              <CardDescription>
-                Same quiz, different sections—big performance gaps
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Quiz</TableHead>
-                      <TableHead>Best → Worst Section</TableHead>
-                      <TableHead className="text-right">Gap (pp)</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {prescriptions.crossSectionFlags.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={3}
-                          className="text-center text-muted-foreground"
-                        >
-                          No significant gaps detected.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      prescriptions.crossSectionFlags.map((r, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell className="font-medium">
-                            {r.quiz}
-                          </TableCell>
-                          <TableCell>
-                            {r.bestSection} → {r.worstSection}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {r.gapPct.toFixed(1)}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Cross-section gaps card removed */}
 
           {/* Cluster details */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1187,7 +1217,7 @@ const Recommendations = () => {
                             colSpan={4}
                             className="text-center text-muted-foreground"
                           >
-                            None detected.
+                            No Strugglers Detected.
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -1235,7 +1265,7 @@ const Recommendations = () => {
                             colSpan={2}
                             className="text-center text-muted-foreground"
                           >
-                            None detected.
+                            No One-time Guessers Detected.
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -1278,7 +1308,7 @@ const Recommendations = () => {
                             colSpan={3}
                             className="text-center text-muted-foreground"
                           >
-                            None detected.
+                            No Multiple-time Guessers Detected.
                           </TableCell>
                         </TableRow>
                       ) : (

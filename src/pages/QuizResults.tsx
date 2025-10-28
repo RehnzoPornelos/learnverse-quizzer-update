@@ -478,10 +478,6 @@ useEffect(() => {
                     <ArrowLeft className="mr-2 h-4 w-4" />
                     Back to Dashboard
                   </Button>
-                  <Button>
-                    <Download className="mr-2 h-4 w-4" />
-                    Export Results
-                  </Button>
                 </div>
               </div>
 
