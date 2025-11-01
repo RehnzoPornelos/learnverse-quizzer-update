@@ -1,12 +1,12 @@
-import { useEffect, useState, useRef } from 'react';
-import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { supabase } from '@/integrations/supabase/client';
-import { motion } from 'framer-motion';
-import { getSocket } from '@/lib/socket';
-import { useAuth } from '@/context/AuthContext';
+import { useEffect, useState, useRef } from "react";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { supabase } from "@/integrations/supabase/client";
+import { motion } from "framer-motion";
+import { getSocket } from "@/lib/socket";
+import { useAuth } from "@/context/AuthContext";
 import { enqueueSubmission, installOnlineFlush } from "@/lib/offlineQueue";
 
 // UI components for dialogs and textarea
@@ -19,17 +19,21 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { Textarea } from '@/components/ui/textarea';
-import { ThemeToggle } from '@/components/theme/ThemeToggle';
+} from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 // Safe UUID v4 (uses crypto if available, falls back to Math.random pattern)
 const genUuidV4 = (): string => {
   try {
     // modern browsers
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    if (
+      typeof crypto !== "undefined" &&
+      typeof crypto.randomUUID === "function"
+    ) {
       return crypto.randomUUID();
     }
     if (typeof crypto !== "undefined" && crypto.getRandomValues) {
@@ -37,12 +41,15 @@ const genUuidV4 = (): string => {
       crypto.getRandomValues(buf);
       buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
       buf[8] = (buf[8] & 0x3f) | 0x80; // variant 10
-      const hex = [...buf].map(b => b.toString(16).padStart(2, "0")).join("");
-      return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+      const hex = [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+        12,
+        16
+      )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
   } catch {}
   // last-resort fallback (still RFC format)
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
@@ -63,9 +70,12 @@ function makePRNG(seed: number) {
   // xorshift32
   let x = seed || 123456789;
   return () => {
-    x ^= x << 13; x >>>= 0;
-    x ^= x >>> 17; x >>>= 0;
-    x ^= x << 5;  x >>>= 0;
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x >>>= 0;
+    x ^= x << 5;
+    x >>>= 0;
     return (x >>> 0) / 0xffffffff;
   };
 }
@@ -80,12 +90,18 @@ function shuffleWithSeed<T>(arr: T[], seed: number): T[] {
 }
 
 // Call FastAPI to grade short answers (returns { is_correct: boolean })
-async function gradeShortAnswerViaBackend(questionId: string, student: string): Promise<boolean> {
+async function gradeShortAnswerViaBackend(
+  questionId: string,
+  student: string
+): Promise<boolean> {
   try {
     const r = await fetch(`${BACKEND_URL}/grade-short-answer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question_id: questionId, student_answer: student }),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question_id: questionId,
+        student_answer: student,
+      }),
     });
     const j = await r.json();
     return Boolean(j?.is_correct);
@@ -97,7 +113,6 @@ async function gradeShortAnswerViaBackend(questionId: string, student: string): 
 const MAX_LEAVE_WARNINGS = 3;
 
 const TakeQuiz = () => {
-
   const hasSavedRef = useRef(false);
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -108,8 +123,8 @@ const TakeQuiz = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
-  const [username, setUsername] = useState('');
-  const [quizCode, setQuizCode] = useState<string>('');
+  const [username, setUsername] = useState("");
+  const [quizCode, setQuizCode] = useState<string>("");
   const socketRef = useRef<any>(null);
 
   // Anti-cheat
@@ -120,19 +135,28 @@ const TakeQuiz = () => {
   const isFinalizingRef = useRef(false);
 
   const { user } = useAuth();
-  const [section, setSection] = useState<{ id: string; code?: string } | null>(null);
+  const [section, setSection] = useState<{ id: string; code?: string } | null>(
+    null
+  );
 
   // Time tracking per question
-  const [questionStartTimes, setQuestionStartTimes] = useState<Record<string, number>>({});
-  const [questionTimeSpent, setQuestionTimeSpent] = useState<Record<string, number>>({});
+  const [questionStartTimes, setQuestionStartTimes] = useState<
+    Record<string, number>
+  >({});
+  const [questionTimeSpent, setQuestionTimeSpent] = useState<
+    Record<string, number>
+  >({});
 
   // Result handling and modals
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
   const [showScore, setShowScore] = useState(false);
-  const [scoreResult, setScoreResult] = useState<{ total: number; correct: number }>({ total: 0, correct: 0 });
+  const [scoreResult, setScoreResult] = useState<{
+    total: number;
+    correct: number;
+  }>({ total: 0, correct: 0 });
   const [showTimeUp, setShowTimeUp] = useState(false);
 
-    // ---- TakeQuiz.tsx additions ----
+  // ---- TakeQuiz.tsx additions ----
   const attemptKeyRef = useRef<string>("");
 
   // auto-flush queued submissions when window regains focus/online
@@ -167,9 +191,11 @@ const TakeQuiz = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "{}");
       if (saved.quizData && !quizData) setQuizData(saved.quizData);
-      if (typeof saved.currentQuestionIndex === "number") setCurrentQuestionIndex(saved.currentQuestionIndex);
+      if (typeof saved.currentQuestionIndex === "number")
+        setCurrentQuestionIndex(saved.currentQuestionIndex);
       if (saved.answers) setAnswers(saved.answers);
-      if (saved.questionTimeSpent) setQuestionTimeSpent(saved.questionTimeSpent);
+      if (saved.questionTimeSpent)
+        setQuestionTimeSpent(saved.questionTimeSpent);
     } catch {}
   }, [quizData]); // run once when quizData first available
 
@@ -178,15 +204,20 @@ const TakeQuiz = () => {
     const key = attemptKeyRef.current;
     if (!key) return;
     const snapshot = {
-      quizData, answers, currentQuestionIndex, questionTimeSpent
+      quizData,
+      answers,
+      currentQuestionIndex,
+      questionTimeSpent,
     };
-    try { localStorage.setItem(key, JSON.stringify(snapshot)); } catch {}
+    try {
+      localStorage.setItem(key, JSON.stringify(snapshot));
+    } catch {}
   }, [quizData, answers, currentQuestionIndex, questionTimeSpent]);
 
   useEffect(() => {
     if (!location.state?.username) {
-      toast.error('User information missing');
-      navigate('/join');
+      toast.error("User information missing");
+      navigate("/join");
       return;
     }
     setUsername(location.state.username);
@@ -196,12 +227,12 @@ const TakeQuiz = () => {
 
     const socket = getSocket();
     socketRef.current = socket;
-    socket.on('server:quiz-end', () => {
-      toast.success('Quiz ended');
-      navigate('/dashboard');
+    socket.on("server:quiz-end", () => {
+      toast.success("Quiz ended");
+      navigate("/dashboard");
     });
     return () => {
-      socket.off('server:quiz-end');
+      socket.off("server:quiz-end");
     };
   }, [id]);
 
@@ -209,7 +240,12 @@ const TakeQuiz = () => {
   const waitForQuizReady = async (timeoutMs = 5000): Promise<boolean> => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (quizData && Array.isArray(quizData.questions) && quizData.questions.length > 0) return true;
+      if (
+        quizData &&
+        Array.isArray(quizData.questions) &&
+        quizData.questions.length > 0
+      )
+        return true;
       await new Promise((r) => setTimeout(r, 120));
     }
     return false;
@@ -235,10 +271,14 @@ const TakeQuiz = () => {
           if (!isFinalizingRef.current) {
             isFinalizingRef.current = true;
             (async () => {
-              toast.error('You left the page 3 times. Submitting your quiz now.');
+              toast.error(
+                "You left the page 3 times. Submitting your quiz now."
+              );
               const ready = await waitForQuizReady(6000);
               if (!ready) {
-                try { await fetchQuizData(); } catch {}
+                try {
+                  await fetchQuizData();
+                } catch {}
                 await new Promise((r) => setTimeout(r, 300));
               }
               finalizeQuiz();
@@ -250,91 +290,123 @@ const TakeQuiz = () => {
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') handleLeave();
+      if (document.visibilityState === "hidden") handleLeave();
     };
     const onWindowBlur = () => handleLeave();
 
-    window.addEventListener('blur', onWindowBlur);
-    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      window.removeEventListener('blur', onWindowBlur);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener("blur", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [showScore, quizData]);
 
   function mapDbQuestionToUi(q: any) {
     const dbType = q.type;
-    if (dbType === 'mcq' || dbType === 'multiple_choice') {
+    if (dbType === "mcq" || dbType === "multiple_choice") {
       const opts: string[] = Array.isArray(q.options) ? q.options : [];
       let correctId: string | null = null;
       if (q.correct_answer !== null && q.correct_answer !== undefined) {
         const ca = q.correct_answer;
-        if (typeof ca === 'number' || (typeof ca === 'string' && /^\d+$/.test(ca))) {
+        if (
+          typeof ca === "number" ||
+          (typeof ca === "string" && /^\d+$/.test(ca))
+        ) {
           correctId = String(ca);
-        } else if (typeof ca === 'string' && ca.length === 1 && /[a-z]/i.test(ca)) {
-          const index = ca.toLowerCase().charCodeAt(0) - 'a'.charCodeAt(0);
+        } else if (
+          typeof ca === "string" &&
+          ca.length === 1 &&
+          /[a-z]/i.test(ca)
+        ) {
+          const index = ca.toLowerCase().charCodeAt(0) - "a".charCodeAt(0);
           correctId = index >= 0 ? String(index) : null;
-        } else if (typeof ca === 'string') {
-          const idx = opts.findIndex((opt) => opt.trim().toLowerCase() === ca.trim().toLowerCase());
+        } else if (typeof ca === "string") {
+          const idx = opts.findIndex(
+            (opt) => opt.trim().toLowerCase() === ca.trim().toLowerCase()
+          );
           if (idx >= 0) correctId = String(idx);
         }
       }
       return {
         id: q.id,
         text: q.text,
-        type: 'multiple_choice',
+        type: "multiple_choice",
         options: opts.map((text, idx) => ({ id: String(idx), text })),
         correctAnswer: correctId,
       };
     }
 
-    if (dbType === 'true_false') {
+    if (dbType === "true_false") {
       let correctId: string | null = null;
       if (q.correct_answer !== null && q.correct_answer !== undefined) {
         const ca = q.correct_answer;
-        if (typeof ca === 'boolean') {
-          correctId = ca ? 'true' : 'false';
-        } else if (typeof ca === 'string') {
+        if (typeof ca === "boolean") {
+          correctId = ca ? "true" : "false";
+        } else if (typeof ca === "string") {
           const v = ca.trim().toLowerCase();
-          correctId = v === 'true' || v === 'false' ? v : null;
+          correctId = v === "true" || v === "false" ? v : null;
         }
       }
       return {
         id: q.id,
         text: q.text,
-        type: 'true_false',
+        type: "true_false",
         options: [
-          { id: 'true', text: 'True' },
-          { id: 'false', text: 'False' },
+          { id: "true", text: "True" },
+          { id: "false", text: "False" },
         ],
         correctAnswer: correctId,
       };
     }
 
-    // short_answer/essay mapped to essay UI
+    if (dbType === "identification") {
+      return {
+        id: q.id,
+        text: q.text,
+        type: "identification",
+        options: [],
+        correctAnswer:
+          typeof q.correct_answer === "string" ? q.correct_answer : null,
+      };
+    }
+
+    if (dbType === "essay") {
+      return {
+        id: q.id,
+        text: q.text,
+        type: "essay",
+        options: [],
+        correctAnswer:
+          typeof q.correct_answer === "string" ? q.correct_answer : null,
+      };
+    }
+
+    // short_answer fallback
     return {
       id: q.id,
       text: q.text,
-      type: 'essay',
+      type: "short_answer",
       options: [],
-      correctAnswer: typeof q.correct_answer === 'string' ? q.correct_answer : null,
+      correctAnswer:
+        typeof q.correct_answer === "string" ? q.correct_answer : null,
     };
   }
 
   const fetchQuizData = async () => {
     try {
       const { data: quiz, error: quizError } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('id', id)
+        .from("quizzes")
+        .select("*")
+        .eq("id", id)
         .single();
       if (quizError) throw quizError;
 
       const { data: questions, error: questionsError } = await supabase
-        .from('quiz_questions')
-        .select('*')
-        .eq('quiz_id', id)
-        .order('order_position', { ascending: true });
+        .from("quiz_questions")
+        .select("*")
+        .eq("quiz_id", id)
+        .order("order_position", { ascending: true });
       if (questionsError) throw questionsError;
 
       // map to UI
@@ -342,40 +414,43 @@ const TakeQuiz = () => {
 
       // ---- NEW: per-student shuffle when quiz.is_rumbled === true ----
       if (quiz?.is_rumbled) {
-        const sectionPart = location.state?.section?.id ?? section?.id ?? '';
+        const sectionPart = location.state?.section?.id ?? section?.id ?? "";
         const seedStr = `${quiz.id}|${username}|${sectionPart}`;
         const seed = hashToInt(seedStr);
         normalized = shuffleWithSeed(normalized, seed);
       }
 
       setQuizData({ ...quiz, questions: normalized });
-      setQuizCode(quiz?.invitation_code || '');
+      setQuizCode(quiz?.invitation_code || "");
       setCurrentQuestionIndex(0); // ensure we start at first after loading
 
       if (!location.state?.section) {
         try {
           const { data: qs } = await supabase
-            .from('quiz_sections')
-            .select('section_id')
-            .eq('quiz_id', id as string);
+            .from("quiz_sections")
+            .select("section_id")
+            .eq("quiz_id", id as string);
           if (Array.isArray(qs) && qs.length === 1) {
             const onlyId = qs[0].section_id as string;
             const { data: sec } = await supabase
-              .from('class_sections')
-              .select('id, code')
-              .eq('id', onlyId)
+              .from("class_sections")
+              .select("id, code")
+              .eq("id", onlyId)
               .maybeSingle();
             if (sec) setSection({ id: sec.id, code: sec.code || undefined });
           }
         } catch {}
       }
 
-      if (quiz?.quiz_duration_seconds && Number(quiz.quiz_duration_seconds) > 0) {
+      if (
+        quiz?.quiz_duration_seconds &&
+        Number(quiz.quiz_duration_seconds) > 0
+      ) {
         setTimeLeft(Number(quiz.quiz_duration_seconds));
       }
     } catch (error) {
-      console.error('Error fetching quiz:', error);
-      toast.error('Failed to load quiz');
+      console.error("Error fetching quiz:", error);
+      toast.error("Failed to load quiz");
     } finally {
       setIsLoading(false);
     }
@@ -385,7 +460,7 @@ const TakeQuiz = () => {
     setAnswers({ ...answers, [questionId]: answerId });
     if (quizCode) {
       const socket = socketRef.current || getSocket();
-      socket.emit('student_answer', {
+      socket.emit("student_answer", {
         room: quizCode,
         student_id: null,
         name: username,
@@ -400,7 +475,7 @@ const TakeQuiz = () => {
     setAnswers({ ...answers, [questionId]: text });
     if (quizCode) {
       const socket = socketRef.current || getSocket();
-      socket.emit('student_answer', {
+      socket.emit("student_answer", {
         room: quizCode,
         student_id: null,
         name: username,
@@ -468,279 +543,349 @@ const TakeQuiz = () => {
     finalizeQuiz();
   };
 
-// ---- Finalize / persist ----
-const finalizeQuiz = async () => {
-  try {
-    if (hasSavedRef.current) {
-      console.info('[finalizeQuiz] already saved – ignoring duplicate call');
-      return;
-    }
-    hasSavedRef.current = true;
-    isFinalizingRef.current = true;
-
-    if (!quizData || !quizData.questions?.length) {
-      console.warn('[finalizeQuiz] Missing quizData, retrying small wait…');
-      const ready = await waitForQuizReady(3000);
-      if (!ready) {
-        toast.error('Cannot finish: quiz data missing.');
+  // ---- Finalize / persist ----
+  const finalizeQuiz = async () => {
+    try {
+      if (hasSavedRef.current) {
+        console.info("[finalizeQuiz] already saved – ignoring duplicate call");
         return;
       }
-    }
+      hasSavedRef.current = true;
+      isFinalizingRef.current = true;
 
-    const quizId: string | undefined =
-      (quizData as any)?.id ?? (typeof id === 'string' ? id : undefined);
-    const UUID_RX =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (!quizId || !UUID_RX.test(quizId)) {
-      console.error('[finalizeQuiz] invalid quizId:', quizId);
-      toast.error('Invalid quiz id. Please re-open the quiz and try again.');
-      return;
-    }
-
-    // capture time on current question
-    const updatedTimes: Record<string, number> = { ...questionTimeSpent };
-    const currentQ = quizData.questions[currentQuestionIndex];
-    if (currentQ) {
-      const start = questionStartTimes[currentQ.id];
-      if (start != null) {
-        const elapsed = (Date.now() - start) / 1000;
-        const existing = updatedTimes[currentQ.id] ?? 0;
-        updatedTimes[currentQ.id] = existing + elapsed;
-      }
-    }
-
-    const total = quizData.questions.length;
-    let correct = 0;
-
-    // ----- resolve sectionIdToSave (MUST NOT BE NULL) -----
-    let sectionIdToSave: string | null = section?.id ?? null;
-    try {
-      if (!sectionIdToSave) {
-        const { data: qs, error: qsErr } = await supabase
-          .from('quiz_sections')
-          .select('section_id')
-          .eq('quiz_id', quizId);
-        if (!qsErr && Array.isArray(qs) && qs.length === 1) {
-          sectionIdToSave = qs[0].section_id as string;
+      if (!quizData || !quizData.questions?.length) {
+        console.warn("[finalizeQuiz] Missing quizData, retrying small wait…");
+        const ready = await waitForQuizReady(3000);
+        if (!ready) {
+          toast.error("Cannot finish: quiz data missing.");
+          return;
         }
       }
-    } catch {}
-    if (!sectionIdToSave) {
-      console.warn('[finalizeQuiz] section not linked/visible – cannot save');
-      toast.error('Cannot submit: your class section is not linked to this quiz.');
-      return;
-    }
 
-    const responseRows: any[] = [];
-    for (const q of quizData.questions) {
-      const studentAnswer = answers[q.id];
-      const correctAnswer = (q as any).correctAnswer;
-
-      let isCorrect = false;
-
-      if (q.type === 'multiple_choice') {
-        isCorrect =
-          studentAnswer !== undefined &&
-          correctAnswer != null &&
-          studentAnswer === correctAnswer;
-      } else if (q.type === 'true_false') {
-        const sa = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
-        const ca = (typeof correctAnswer === 'string' ? correctAnswer : String(correctAnswer)).trim().toLowerCase();
-        isCorrect = !!sa && !!ca && sa === ca;
-      } else {
-        const sa = typeof studentAnswer === 'string' ? studentAnswer : '';
-        isCorrect = sa ? await gradeShortAnswerViaBackend(q.id, sa) : false;
+      const quizId: string | undefined =
+        (quizData as any)?.id ?? (typeof id === "string" ? id : undefined);
+      const UUID_RX =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!quizId || !UUID_RX.test(quizId)) {
+        console.error("[finalizeQuiz] invalid quizId:", quizId);
+        toast.error("Invalid quiz id. Please re-open the quiz and try again.");
+        return;
       }
 
-      if (isCorrect) correct++;
-
-      const timeSpent = updatedTimes[q.id];
-      const time_spent_seconds =
-        typeof timeSpent === 'number' && Number.isFinite(timeSpent)
-          ? Math.round(timeSpent)
-          : 0; // ALWAYS an integer (NOT NULL in schema)
-
-      let selected_option_jsonb: any = '""'; // jsonb default ""
-      if (q.type === 'multiple_choice') {
-        const opt = (q.options || []).find((o: any) => o.id === studentAnswer);
-        if (opt && typeof opt.text === 'string') selected_option_jsonb = opt.text;
-      } else if (q.type === 'true_false') {
-        const v = (typeof studentAnswer === 'string' ? studentAnswer : String(studentAnswer)).trim().toLowerCase();
-        if (v === 'true' || v === 'false') selected_option_jsonb = v;
+      // capture time on current question
+      const updatedTimes: Record<string, number> = { ...questionTimeSpent };
+      const currentQ = quizData.questions[currentQuestionIndex];
+      if (currentQ) {
+        const start = questionStartTimes[currentQ.id];
+        if (start != null) {
+          const elapsed = (Date.now() - start) / 1000;
+          const existing = updatedTimes[currentQ.id] ?? 0;
+          updatedTimes[currentQ.id] = existing + elapsed;
+        }
       }
 
-      const text_answer: string = q.type === 'essay'
-        ? String(answers[q.id] ?? '')
-        : '';
+      const total = quizData.questions.length;
+      let correct = 0;
 
-      responseRows.push({
-        quiz_id: quizId,
-        question_id: q.id,
-        section_id: sectionIdToSave,             // NOT NULL
-        student_name: username ?? 'Unknown',
-        answered_at: new Date().toISOString(),
-        time_spent_seconds,
-        is_correct: isCorrect,
-        selected_option: selected_option_jsonb,   // jsonb-compatible scalar
-        text_answer,                              // text NOT NULL (we send empty when not essay)
-      });
-    }
+      // ----- resolve sectionIdToSave (MUST NOT BE NULL) -----
+      let sectionIdToSave: string | null = section?.id ?? null;
+      try {
+        if (!sectionIdToSave) {
+          const { data: qs, error: qsErr } = await supabase
+            .from("quiz_sections")
+            .select("section_id")
+            .eq("quiz_id", quizId);
+          if (!qsErr && Array.isArray(qs) && qs.length === 1) {
+            sectionIdToSave = qs[0].section_id as string;
+          }
+        }
+      } catch {}
+      if (!sectionIdToSave) {
+        console.warn("[finalizeQuiz] section not linked/visible – cannot save");
+        toast.error(
+          "Cannot submit: your class section is not linked to this quiz."
+        );
+        return;
+      }
 
-    // Show score immediately
-    setQuestionTimeSpent(updatedTimes);
-    setScoreResult({ total, correct });
-    setShowScore(true);
-    setShowAutoSubmitDialog(false);
+      const responseRows: any[] = [];
+      for (const q of quizData.questions) {
+        const studentAnswer = answers[q.id];
+        const correctAnswer = (q as any).correctAnswer;
 
-    // Best-effort notify
-    try {
-      if (quizCode) {
-        const socket = socketRef.current || getSocket();
-        socket.emit('student_finished', {
-          room: quizCode,
-          student_id: null,
-          name: username,
-          correct,
-          total,
+        let isCorrect = false;
+
+        if (q.type === "multiple_choice") {
+          isCorrect =
+            studentAnswer !== undefined &&
+            correctAnswer != null &&
+            studentAnswer === correctAnswer;
+        } else if (q.type === "true_false") {
+          const sa = (
+            typeof studentAnswer === "string"
+              ? studentAnswer
+              : String(studentAnswer)
+          )
+            .trim()
+            .toLowerCase();
+          const ca = (
+            typeof correctAnswer === "string"
+              ? correctAnswer
+              : String(correctAnswer)
+          )
+            .trim()
+            .toLowerCase();
+          isCorrect = !!sa && !!ca && sa === ca;
+        } else if (q.type === "identification") {
+          // Identification: normalize and compare exactly
+          const sa = typeof studentAnswer === "string" ? studentAnswer : "";
+          const ca = typeof correctAnswer === "string" ? correctAnswer : "";
+
+          // Normalize: remove all non-alphanumeric, lowercase
+          const normalizeId = (s: string) =>
+            s.replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+          isCorrect = sa && ca && normalizeId(sa) === normalizeId(ca);
+        } else {
+          // short_answer or essay: use backend grading
+          const sa = typeof studentAnswer === "string" ? studentAnswer : "";
+          isCorrect = sa ? await gradeShortAnswerViaBackend(q.id, sa) : false;
+        }
+
+        if (isCorrect) correct++;
+
+        const timeSpent = updatedTimes[q.id];
+        const time_spent_seconds =
+          typeof timeSpent === "number" && Number.isFinite(timeSpent)
+            ? Math.round(timeSpent)
+            : 0;
+
+        let selected_option_jsonb: any = '""';
+        let text_answer: string = "";
+
+        // ✅ FIX: Properly populate selected_option and text_answer based on type
+        if (q.type === "multiple_choice") {
+          const opt = (q.options || []).find(
+            (o: any) => o.id === studentAnswer
+          );
+          if (opt && typeof opt.text === "string") {
+            selected_option_jsonb = opt.text;
+          }
+        } else if (q.type === "true_false") {
+          const v = (
+            typeof studentAnswer === "string"
+              ? studentAnswer
+              : String(studentAnswer)
+          )
+            .trim()
+            .toLowerCase();
+          if (v === "true" || v === "false") {
+            selected_option_jsonb = v;
+          }
+        } else if (
+          q.type === "identification" ||
+          q.type === "short_answer" ||
+          q.type === "essay"
+        ) {
+          // ✅ Save to text_answer for identification, short_answer, and essay
+          text_answer = String(studentAnswer ?? "");
+        }
+
+        responseRows.push({
+          quiz_id: quizId,
+          question_id: q.id,
           section_id: sectionIdToSave,
-          ts: Date.now(),
+          student_name: username ?? "Unknown",
+          answered_at: new Date().toISOString(),
+          time_spent_seconds,
+          is_correct: isCorrect,
+          selected_option: selected_option_jsonb,
+          text_answer, // ✅ Now properly set
         });
-        setTimeout(() => {
-          try { socket.disconnect(); } catch {}
-        }, 300);
       }
-    } catch {}
 
-// ---------- OFFLINE-TOLERANT PERSIST ----------
-// Build payloads first (so catch() can queue them if needed)
-const totalTimeSeconds = Math.round(
-  Object.values(updatedTimes).reduce(
-    (a, b) => a + (Number.isFinite(b as number) ? (b as number) : 0),
-    0
-  )
-);
+      // Show score immediately
+      setQuestionTimeSpent(updatedTimes);
+      setScoreResult({ total, correct });
+      setShowScore(true);
+      setShowAutoSubmitDialog(false);
 
-// 1) Pre-generate the performance ID so we can FK responses to it (online/offline-safe)
-const perfId = genUuidV4();
+      // Best-effort notify
+      try {
+        if (quizCode) {
+          const socket = socketRef.current || getSocket();
+          socket.emit("student_finished", {
+            room: quizCode,
+            student_id: null,
+            name: username,
+            correct,
+            total,
+            section_id: sectionIdToSave,
+            ts: Date.now(),
+          });
+          setTimeout(() => {
+            try {
+              socket.disconnect();
+            } catch {}
+          }, 300);
+        }
+      } catch {}
 
-// 2) Performance row (WITH id; DB will accept client-supplied UUID)
-const perfInsert = {
-  id: perfId,
-  quiz_id: quizId,
-  score: Number(correct),
-  completion_time_seconds: totalTimeSeconds,
-  student_name: username ?? "Unknown",
-  section_id: sectionIdToSave as string,
-  // attempt_no omitted (defaults to 1) — adjust if you later add per-student attempt logic
-};
+      // ---------- OFFLINE-TOLERANT PERSIST ----------
+      // Build payloads first (so catch() can queue them if needed)
+      const totalTimeSeconds = Math.round(
+        Object.values(updatedTimes).reduce(
+          (a, b) => a + (Number.isFinite(b as number) ? (b as number) : 0),
+          0
+        )
+      );
 
-// 3) Responses with the FK set to perfId
-const responsesWithPerf = responseRows.map(r => ({
-  ...r,
-  student_perf_id: perfId
-}));
+      // 1) Pre-generate the performance ID so we can FK responses to it (online/offline-safe)
+      const perfId = genUuidV4();
 
-// ✅ FAST-PATH: if offline, enqueue & toast immediately
-if (!navigator.onLine) {
-  enqueueSubmission({
-    kind: "quiz_submission_v1",
-    quizId,
-    perfInsert,
-    responsesTemplate: responsesWithPerf,
-  });
-  toast.warning("You’re offline. Your quiz is saved locally and will auto-submit once you’re back online.");
-  try { localStorage.removeItem(attemptKeyRef.current); } catch {}
-  return;   // avoid running the online branch
-}
+      // 2) Performance row (WITH id; DB will accept client-supplied UUID)
+      const perfInsert = {
+        id: perfId,
+        quiz_id: quizId,
+        score: Number(correct),
+        completion_time_seconds: totalTimeSeconds,
+        student_name: username ?? "Unknown",
+        section_id: sectionIdToSave as string,
+        // attempt_no omitted (defaults to 1) — adjust if you later add per-student attempt logic
+      };
 
-try {
-  // Guard: ensure quiz is linked to section to avoid FK/RLS issues
-  const { data: linkRow, error: linkErr } = await supabase
-    .from("quiz_sections")
-    .select("quiz_id, section_id")
-    .eq("quiz_id", quizId)
-    .eq("section_id", sectionIdToSave)
-    .maybeSingle();
-  if (linkErr || !linkRow) {
-    toast.error("Cannot submit: your class is not allowed for this quiz.");
-    return;
-  }
+      // 3) Responses with the FK set to perfId
+      const responsesWithPerf = responseRows.map((r) => ({
+        ...r,
+        student_perf_id: perfId,
+      }));
 
-  const doPersist = async () => {
-    // Insert perf WITH known id
-    const { error: perfErr } = await supabase
-      .from("analytics_student_performance")
-      .insert(perfInsert); // no .select() needed since we already have perfId
-    if (perfErr) throw perfErr;
-
-    // Insert responses, already carrying student_perf_id
-    const { error: respErr } = await supabase
-      .from("quiz_responses")
-      .insert(responsesWithPerf);
-    if (respErr) throw respErr;
-  };
-
-    // Attempt #1
-    try {
-      await doPersist();
-    } catch (errFirst: any) {
-      const msg = String(errFirst?.message || "").toLowerCase();
-      const status = errFirst?.status ?? errFirst?.code;
-      const isAuth = status === 401 || status === 403 || msg.includes("invalid refresh token");
-
-      if (isAuth) {
-        try { await supabase.auth.signOut(); } catch {}
-        await doPersist(); // retry once after re-auth
-      } else {
-        throw errFirst;
+      // ✅ FAST-PATH: if offline, enqueue & toast immediately
+      if (!navigator.onLine) {
+        enqueueSubmission({
+          kind: "quiz_submission_v1",
+          quizId,
+          perfInsert,
+          responsesTemplate: responsesWithPerf,
+        });
+        toast.warning(
+          "You’re offline. Your quiz is saved locally and will auto-submit once you’re back online."
+        );
+        try {
+          localStorage.removeItem(attemptKeyRef.current);
+        } catch {}
+        return; // avoid running the online branch
       }
+
+      try {
+        // Guard: ensure quiz is linked to section to avoid FK/RLS issues
+        const { data: linkRow, error: linkErr } = await supabase
+          .from("quiz_sections")
+          .select("quiz_id, section_id")
+          .eq("quiz_id", quizId)
+          .eq("section_id", sectionIdToSave)
+          .maybeSingle();
+        if (linkErr || !linkRow) {
+          toast.error(
+            "Cannot submit: your class is not allowed for this quiz."
+          );
+          return;
+        }
+
+        const doPersist = async () => {
+          // Insert perf WITH known id
+          const { error: perfErr } = await supabase
+            .from("analytics_student_performance")
+            .insert(perfInsert); // no .select() needed since we already have perfId
+          if (perfErr) throw perfErr;
+
+          // Insert responses, already carrying student_perf_id
+          const { error: respErr } = await supabase
+            .from("quiz_responses")
+            .insert(responsesWithPerf);
+          if (respErr) throw respErr;
+        };
+
+        // Attempt #1
+        try {
+          await doPersist();
+        } catch (errFirst: any) {
+          const msg = String(errFirst?.message || "").toLowerCase();
+          const status = errFirst?.status ?? errFirst?.code;
+          const isAuth =
+            status === 401 ||
+            status === 403 ||
+            msg.includes("invalid refresh token");
+
+          if (isAuth) {
+            try {
+              await supabase.auth.signOut();
+            } catch {}
+            await doPersist(); // retry once after re-auth
+          } else {
+            throw errFirst;
+          }
+        }
+
+        // ✅ Online success toast
+        toast.success("Your quiz was submitted successfully!");
+
+        // Success: clear local snapshot
+        try {
+          localStorage.removeItem(attemptKeyRef.current);
+        } catch {}
+      } catch (netErr: any) {
+        // Queue an offline-safe copy that preserves the same FK
+        enqueueSubmission({
+          kind: "quiz_submission_v1",
+          quizId,
+          // keep the perf id so responses link on sync
+          perfInsert, // includes id: perfId
+          responsesTemplate: responsesWithPerf,
+        });
+
+        const msg = String(netErr?.message || "").toLowerCase();
+        const status = netErr?.status ?? netErr?.code;
+        const isAuth =
+          status === 401 ||
+          status === 403 ||
+          msg.includes("invalid refresh token");
+        const isNetwork =
+          !navigator.onLine ||
+          msg.includes("failed to fetch") ||
+          msg.includes("network");
+
+        if (isAuth) {
+          toast.warning(
+            "Saved locally. Re-login and I’ll auto-sync your quiz."
+          );
+        } else if (isNetwork) {
+          // ✅ Offline success toast
+          toast.warning(
+            "You’re offline. Your quiz is saved locally and will auto-submit once you’re back online."
+          );
+        } else {
+          console.error("[finalizeQuiz] persist error:", netErr);
+          toast.warning(
+            "Saved locally due to a server error. I’ll auto-sync soon."
+          );
+        }
+      }
+    } catch (fatal) {
+      console.error("[finalizeQuiz] unexpected failure:", fatal);
+      toast.error("Something went wrong while finishing the quiz.");
     }
-
-    // ✅ Online success toast
-    toast.success("Your quiz was submitted successfully!");
-
-    // Success: clear local snapshot
-    try { localStorage.removeItem(attemptKeyRef.current); } catch {}
-
-} catch (netErr: any) {
-  // Queue an offline-safe copy that preserves the same FK
-  enqueueSubmission({
-    kind: "quiz_submission_v1",
-    quizId,
-    // keep the perf id so responses link on sync
-    perfInsert,           // includes id: perfId
-    responsesTemplate: responsesWithPerf,
-  });
-
-  const msg = String(netErr?.message || "").toLowerCase();
-  const status = netErr?.status ?? netErr?.code;
-  const isAuth = status === 401 || status === 403 || msg.includes("invalid refresh token");
-  const isNetwork = !navigator.onLine || msg.includes("failed to fetch") || msg.includes("network");
-
-  if (isAuth) {
-    toast.warning("Saved locally. Re-login and I’ll auto-sync your quiz.");
-  } else if (isNetwork) {
-    // ✅ Offline success toast
-    toast.warning("You’re offline. Your quiz is saved locally and will auto-submit once you’re back online.");
-  } else {
-    console.error("[finalizeQuiz] persist error:", netErr);
-    toast.warning("Saved locally due to a server error. I’ll auto-sync soon.");
-  }
-}
-
-
-
-  } catch (fatal) {
-    console.error('[finalizeQuiz] unexpected failure:', fatal);
-    toast.error('Something went wrong while finishing the quiz.');
-  }
-};
+  };
 
   const handleTimeUp = () => setShowTimeUp(true);
 
   const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+    const mins = Math.floor(seconds / 60)
+      .toString()
+      .padStart(2, "0");
+    const secs = Math.floor(seconds % 60)
+      .toString()
+      .padStart(2, "0");
     return `${mins}:${secs}`;
   };
 
@@ -786,9 +931,10 @@ try {
               Score: {scoreResult.correct} / {scoreResult.total}
             </p>
             <p className="mb-6">
-              You answered {scoreResult.correct} out of {scoreResult.total} questions correctly.
+              You answered {scoreResult.correct} out of {scoreResult.total}{" "}
+              questions correctly.
             </p>
-            <Button onClick={() => navigate('/')}>Back to Home</Button>
+            <Button onClick={() => navigate("/")}>Back to Home</Button>
           </CardContent>
         </Card>
       </div>
@@ -796,7 +942,6 @@ try {
   }
 
   return (
-
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -812,7 +957,8 @@ try {
             <p className="text-muted-foreground">Taking as: {username}</p>
             {timeLeft !== null && (
               <p className="mt-2 text-muted-foreground">
-                Time remaining: <span className="font-semibold">{formatTime(timeLeft)}</span>
+                Time remaining:{" "}
+                <span className="font-semibold">{formatTime(timeLeft)}</span>
               </p>
             )}
           </div>
@@ -824,7 +970,8 @@ try {
         {/* Offline banner */}
         {!isOnline && (
           <div className="mb-4 rounded-md bg-amber-100 text-amber-900 px-4 py-2 border border-amber-300">
-            You’re offline. Your answers are saved locally and will auto-sync when connection returns.
+            You’re offline. Your answers are saved locally and will auto-sync
+            when connection returns.
           </div>
         )}
 
@@ -836,7 +983,8 @@ try {
             </span>
           </div>
           <div className="text-sm text-muted-foreground">
-            {Object.keys(answers).length} of {quizData.questions.length} answered
+            {Object.keys(answers).length} of {quizData.questions.length}{" "}
+            answered
           </div>
         </div>
 
@@ -845,10 +993,13 @@ try {
           {quizData.questions.map((q: any, idx: number) => {
             const isAnswered = answers[q.id] !== undefined;
             const isCurrent = idx === currentQuestionIndex;
-            let colorClass = '';
-            if (isCurrent) colorClass = 'bg-primary text-primary-foreground';
-            else if (isAnswered) colorClass = 'bg-green-500 text-white dark:bg-green-600';
-            else colorClass = 'bg-muted text-muted-foreground dark:bg-gray-700 dark:text-gray-300';
+            let colorClass = "";
+            if (isCurrent) colorClass = "bg-primary text-primary-foreground";
+            else if (isAnswered)
+              colorClass = "bg-green-500 text-white dark:bg-green-600";
+            else
+              colorClass =
+                "bg-muted text-muted-foreground dark:bg-gray-700 dark:text-gray-300";
             return (
               <button
                 key={q.id}
@@ -864,19 +1015,23 @@ try {
         {/* Question */}
         <Card className="mb-6">
           <CardContent className="pt-6">
-            <h2 className="text-xl font-semibold mb-4">{currentQuestion.text}</h2>
+            <h2 className="text-xl font-semibold mb-4">
+              {currentQuestion.text}
+            </h2>
 
-            {currentQuestion.type === 'multiple_choice' && (
+            {currentQuestion.type === "multiple_choice" && (
               <div className="space-y-3">
                 {currentQuestion.options.map((option: any) => (
                   <div
                     key={option.id}
                     className={`p-4 border rounded-lg cursor-pointer transition-all duration-200 ${
                       answers[currentQuestion.id] === option.id
-                        ? 'bg-primary/10 border-primary scale-100'
-                        : 'hover:bg-muted hover:scale-105'
+                        ? "bg-primary/10 border-primary scale-100"
+                        : "hover:bg-muted hover:scale-105"
                     }`}
-                    onClick={() => handleSelectAnswer(currentQuestion.id, option.id)}
+                    onClick={() =>
+                      handleSelectAnswer(currentQuestion.id, option.id)
+                    }
                   >
                     {option.text}
                   </div>
@@ -884,17 +1039,19 @@ try {
               </div>
             )}
 
-            {currentQuestion.type === 'true_false' && (
+            {currentQuestion.type === "true_false" && (
               <div className="space-y-3">
                 {currentQuestion.options.map((option: any) => (
                   <div
                     key={option.id}
                     className={`p-4 border rounded-lg cursor-pointer transition-all duration-200 ${
                       answers[currentQuestion.id] === option.id
-                        ? 'bg-primary/10 border-primary scale-100'
-                        : 'hover:bg-muted hover:scale-105'
+                        ? "bg-primary/10 border-primary scale-100"
+                        : "hover:bg-muted hover:scale-105"
                     }`}
-                    onClick={() => handleSelectAnswer(currentQuestion.id, option.id)}
+                    onClick={() =>
+                      handleSelectAnswer(currentQuestion.id, option.id)
+                    }
                   >
                     {option.text}
                   </div>
@@ -902,13 +1059,48 @@ try {
               </div>
             )}
 
-            {currentQuestion.type === 'essay' && (
+            {currentQuestion.type === "identification" && (
+              <div>
+                <Input
+                  className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary hover:border-primary/60"
+                  placeholder="Enter the term or concept (1-5 words)"
+                  value={answers[currentQuestion.id] || ""}
+                  onChange={(e) =>
+                    handleEssayAnswer(currentQuestion.id, e.target.value)
+                  }
+                  maxLength={100}
+                />
+                <p className="text-xs text-muted-foreground mt-2">
+                  Enter a specific term, name, or concept. Spelling matters!
+                </p>
+              </div>
+            )}
+
+            {currentQuestion.type === "short_answer" && (
               <Textarea
-                className="w-full min-h-[150px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary hover:border-primary/60"
-                placeholder="Type your answer here..."
-                value={answers[currentQuestion.id] || ''}
-                onChange={(e) => handleEssayAnswer(currentQuestion.id, e.target.value)}
+                className="w-full min-h-[100px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary hover:border-primary/60"
+                placeholder="Type your short answer here (1-2 sentences)..."
+                value={answers[currentQuestion.id] || ""}
+                onChange={(e) =>
+                  handleEssayAnswer(currentQuestion.id, e.target.value)
+                }
               />
+            )}
+
+            {currentQuestion.type === "essay" && (
+              <div>
+                <Textarea
+                  className="w-full min-h-[200px] p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary hover:border-primary/60"
+                  placeholder="Type your comprehensive essay answer here..."
+                  value={answers[currentQuestion.id] || ""}
+                  onChange={(e) =>
+                    handleEssayAnswer(currentQuestion.id, e.target.value)
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-2">
+                  Provide a detailed answer (2-4 sentences minimum)
+                </p>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -937,11 +1129,14 @@ try {
           <AlertDialogHeader>
             <AlertDialogTitle>Unanswered Questions</AlertDialogTitle>
             <AlertDialogDescription>
-              You still have unanswered questions. Are you sure you want to submit your quiz?
+              You still have unanswered questions. Are you sure you want to
+              submit your quiz?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setShowConfirmSubmit(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setShowConfirmSubmit(false)}>
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 setShowConfirmSubmit(false);
@@ -960,7 +1155,8 @@ try {
           <AlertDialogHeader>
             <AlertDialogTitle>Time's Up!</AlertDialogTitle>
             <AlertDialogDescription>
-              The quiz timer has expired. Your answers will be submitted automatically.
+              The quiz timer has expired. Your answers will be submitted
+              automatically.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -982,8 +1178,12 @@ try {
           <AlertDialogHeader>
             <AlertDialogTitle>Stay on this page</AlertDialogTitle>
             <AlertDialogDescription>
-              We detected that you switched tabs or windows. Please do not leave the quiz page.
-              {` You have ${Math.max(0, MAX_LEAVE_WARNINGS - leaveCount)} warning(s) left before automatic submission.`}
+              We detected that you switched tabs or windows. Please do not leave
+              the quiz page.
+              {` You have ${Math.max(
+                0,
+                MAX_LEAVE_WARNINGS - leaveCount
+              )} warning(s) left before automatic submission.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -995,13 +1195,16 @@ try {
       </AlertDialog>
 
       {/* Auto-submit dialog (3rd time) */}
-      <AlertDialog open={showAutoSubmitDialog} onOpenChange={setShowAutoSubmitDialog}>
+      <AlertDialog
+        open={showAutoSubmitDialog}
+        onOpenChange={setShowAutoSubmitDialog}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Auto-submission in progress</AlertDialogTitle>
             <AlertDialogDescription>
-              You left the quiz page 3 times. Your answers are being submitted automatically.
-              Please wait…
+              You left the quiz page 3 times. Your answers are being submitted
+              automatically. Please wait…
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

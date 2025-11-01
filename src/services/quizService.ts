@@ -92,7 +92,7 @@ export async function setQuizRumbled(quizId: string, rumbled: boolean) {
     .eq('id', quizId)
     .select('id, is_rumbled')
     .single();
-    
+
   if (error) throw error;
   return data;
 }
@@ -117,16 +117,25 @@ export async function getQuizWithQuestions(quizId: string) {
   if (qqErr) throw qqErr;
 
   // normalize options to string[] so the dropdown sees choices
-  const normalized = (questions ?? []).map((q: any) => ({
-    ...q,
-    options: Array.isArray(q.options)
-      ? q.options
-          .map((o: any) =>
-            typeof o === 'string' ? o : (o?.text ?? o?.label ?? o?.value ?? '')
-          )
-          .filter(Boolean)
-      : [],
-  }));
+  // normalize options to string[] for mcq/true_false; null for others
+  const normalized = (questions ?? []).map((q: any) => {
+    const type = q.type;
+    if (type === 'mcq' || type === 'multiple_choice' || type === 'true_false') {
+      return {
+        ...q,
+        options: Array.isArray(q.options)
+          ? q.options
+            .map((o: any) =>
+              typeof o === 'string' ? o : (o?.text ?? o?.label ?? o?.value ?? '')
+            )
+            .filter(Boolean)
+          : [],
+      };
+    } else {
+      // identification, essay, short_answer - no options
+      return { ...q, options: null };
+    }
+  });
 
   return { ...quiz, questions: normalized };
 }
@@ -234,30 +243,43 @@ export async function getStudentPerformanceDetails(perfId: string) {
     const type = String(q.type ?? "").toLowerCase();
     const correct = q.correct_answer;
 
-    // normalize student answer for display
+    // ✅ FIX: Properly extract student answer based on type
     let studentAnswer = "";
-    if (type.includes("short")) {
+
+    if (type === "identification" || type === "short_answer" || type === "essay") {
+      // ✅ Use text_answer for these types
       studentAnswer = String(r.text_answer ?? "");
     } else {
-      // MCQ/TF stored as jsonb
+      // MCQ/TF: use selected_option (jsonb)
       studentAnswer = (r.selected_option === null || r.selected_option === undefined)
         ? ""
         : String(r.selected_option);
       // Strip outer quotes if it's a JSON scalar string
-      if (/^".*"$/.test(studentAnswer)) studentAnswer = studentAnswer.slice(1, -1);
+      if (/^".*"$/.test(studentAnswer)) {
+        studentAnswer = studentAnswer.slice(1, -1);
+      }
+    }
+
+    // ✅ Format correct answer for display
+    let correctAnswerDisplay = "";
+    if (type === "multiple_choice" || type === "mcq") {
+      correctAnswerDisplay = typeof correct === "string" ? correct : JSON.stringify(correct);
+    } else if (type === "true_false") {
+      correctAnswerDisplay = correct === true ? "True" : "False";
+    } else {
+      correctAnswerDisplay = typeof correct === "string" ? correct : JSON.stringify(correct);
     }
 
     return {
       questionText: String(q.text ?? ""),
       isCorrect: !!r.is_correct,
       timeSpent: secsToText(r.time_spent_seconds),
-      correctAnswer: typeof correct === "string" ? correct : JSON.stringify(correct),
-      studentAnswer,
+      correctAnswer: correctAnswerDisplay,
+      studentAnswer, // ✅ Now correctly populated
       quizId,
     };
   });
 
-  // Sort by question order if you want: requires fetching order_position; omit for now.
   return out;
 }
 
@@ -286,21 +308,21 @@ export const deleteQuiz = async (quizId: string) => {
 export const generateQuestionsFromFile = async (file: File, numQuestions: number, difficulty: string, questionTypes: string[]): Promise<QuizQuestion[]> => {
   try {
     console.log('Processing file:', file.name, 'Type:', file.type, 'Size:', file.size);
-    
+
     // Extract text from the file based on file type
     const text = await extractTextFromFile(file);
-    
+
     if (!text || text.length < 50) {
       console.log('Insufficient text extracted, using demo questions');
       return generateDemoQuestions(numQuestions, difficulty, questionTypes);
     }
-    
+
     console.log('Extracted text length:', text.length);
     console.log('Text preview:', text.substring(0, 200));
-    
+
     // Determine file type for better processing
     const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-    
+
     // Call the Groq-powered edge function
     const { data, error } = await supabase.functions.invoke('generate-quiz-groq', {
       body: {
@@ -311,27 +333,27 @@ export const generateQuestionsFromFile = async (file: File, numQuestions: number
         fileType: fileExtension
       }
     });
-    
+
     if (error) {
       console.error('Error calling quiz generation function:', error);
       throw error;
     }
-    
+
     if (data.error) {
       throw new Error(data.error);
     }
-    
+
     console.log('Generated questions:', data.questions?.length || 0);
-    
+
     // Ensure all questions have proper UUIDs
     const questionsWithUUIDs = (data.questions || []).map((question: any, index: number) => ({
       ...question,
       id: uuidv4(), // Generate proper UUID for each question
       order_position: index
     }));
-    
+
     return questionsWithUUIDs;
-    
+
   } catch (error) {
     console.error('Error generating questions from file:', error);
     // Fallback to demo implementation
@@ -343,11 +365,11 @@ export const generateQuestionsFromFile = async (file: File, numQuestions: number
 const extractTextFromFile = async (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    
+
     reader.onload = () => {
       try {
         let text = '';
-        
+
         if (file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')) {
           // Handle text files
           text = reader.result as string;
@@ -356,19 +378,19 @@ const extractTextFromFile = async (file: File): Promise<string> => {
           // Since we can't parse PDF properly in browser, we'll send the file data
           const arrayBuffer = reader.result as ArrayBuffer;
           const uint8Array = new Uint8Array(arrayBuffer);
-          
+
           // Convert to base64 for transmission
           let binary = '';
           for (let i = 0; i < uint8Array.byteLength; i++) {
             binary += String.fromCharCode(uint8Array[i]);
           }
           text = btoa(binary);
-        } else if (file.name.toLowerCase().endsWith('.docx') || 
-                   file.name.toLowerCase().endsWith('.pptx')) {
+        } else if (file.name.toLowerCase().endsWith('.docx') ||
+          file.name.toLowerCase().endsWith('.pptx')) {
           // For Office documents, also send as binary data
           const arrayBuffer = reader.result as ArrayBuffer;
           const uint8Array = new Uint8Array(arrayBuffer);
-          
+
           // Convert to base64 for transmission
           let binary = '';
           for (let i = 0; i < uint8Array.byteLength; i++) {
@@ -379,7 +401,7 @@ const extractTextFromFile = async (file: File): Promise<string> => {
           // Default: try to read as text
           text = reader.result as string;
         }
-        
+
         // For text files, validate content
         if ((file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')) && text && text.length > 10) {
           resolve(text);
@@ -395,12 +417,12 @@ const extractTextFromFile = async (file: File): Promise<string> => {
         resolve('');
       }
     };
-    
+
     reader.onerror = () => {
       console.error('Error reading file');
       reject(new Error('Failed to read file'));
     };
-    
+
     // Read file based on type
     if (file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')) {
       reader.readAsText(file, 'UTF-8');
@@ -416,20 +438,20 @@ const generateDemoQuestions = async (numQuestions: number, difficulty: string, q
   return new Promise((resolve) => {
     setTimeout(() => {
       const questions: QuizQuestion[] = [];
-      
+
       const topics = [
-        "Neural Networks", "Deep Learning", "Machine Learning", 
+        "Neural Networks", "Deep Learning", "Machine Learning",
         "Artificial Intelligence", "Data Science", "Natural Language Processing",
         "Computer Vision", "Reinforcement Learning", "Statistical Analysis",
         "Big Data", "Quantum Computing", "Blockchain"
       ];
-      
+
       for (let i = 0; i < numQuestions; i++) {
         const type = questionTypes[Math.floor(Math.random() * questionTypes.length)];
         const topic = topics[Math.floor(Math.random() * topics.length)];
-        
+
         let question: QuizQuestion;
-        
+
         if (type === 'multiple_choice') {
           question = {
             id: uuidv4(), // Proper UUID generation
@@ -460,10 +482,10 @@ const generateDemoQuestions = async (numQuestions: number, difficulty: string, q
             order_position: i
           };
         }
-        
+
         questions.push(question);
       }
-      
+
       resolve(questions);
     }, 2000);
   });
@@ -474,7 +496,7 @@ const generateQuestionText = (topic: string, difficulty: string): string => {
   const easyPrefixes = ["What is", "Define", "Explain", "Describe"];
   const mediumPrefixes = ["How does", "Compare and contrast", "Analyze"];
   const hardPrefixes = ["Critically evaluate", "Synthesize", "Hypothesize about"];
-  
+
   let prefixes;
   switch (difficulty) {
     case 'easy':
@@ -486,7 +508,7 @@ const generateQuestionText = (topic: string, difficulty: string): string => {
     default:
       prefixes = mediumPrefixes;
   }
-  
+
   const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
   return `${prefix} ${topic}?`;
 };
@@ -500,7 +522,7 @@ const generateTrueFalseQuestion = (topic: string, difficulty: string): string =>
     `${topic} requires specialized hardware.`,
     `${topic} was invented in the 1950s.`
   ];
-  
+
   return statements[Math.floor(Math.random() * statements.length)];
 };
 
@@ -513,7 +535,7 @@ const generateEssayQuestion = (topic: string, difficulty: string): string => {
     `Compare the approaches to ${topic} in different industries.`,
     `What are the limitations of current ${topic} technologies?`
   ];
-  
+
   return templates[Math.floor(Math.random() * templates.length)];
 };
 
@@ -591,7 +613,7 @@ export async function saveQuiz(
     // keep DB values consistent
     let dbType = q.type;
     if (dbType === 'multiple_choice') dbType = 'mcq';
-    const allowed = ['mcq', 'true_false', 'short_answer'];
+    const allowed = ['mcq', 'true_false', 'short_answer', 'identification', 'essay'];
     if (!allowed.includes(dbType)) dbType = 'mcq';
 
     let options = q.options;
@@ -603,8 +625,14 @@ export async function saveQuiz(
     } else if (dbType === 'true_false') {
       options = null;
       correct = typeof correct === 'string' ? correct.toLowerCase() === 'true' : !!correct;
+    } else if (dbType === 'identification') {
+      options = null;
+      correct = correct ?? '';
+    } else if (dbType === 'essay') {
+      options = null;
+      correct = correct ?? '';
     } else {
-      options = null; // short_answer
+      options = null; // short_answer or default
       // correct stays as string
     }
 
@@ -655,19 +683,19 @@ export async function saveQuiz(
 // Publish a quiz
 export const publishQuiz = async (quizId: string) => {
   const invitationCode = generateInvitationCode();
-  
+
   const { data, error } = await supabase
     .from('quizzes')
     .update({ published: true, invitation_code: invitationCode })
     .eq('id', quizId)
     .select()
     .single();
-    
+
   if (error) {
     console.error("Error publishing quiz:", error);
     throw error;
   }
-  
+
   return data;
 };
 
@@ -900,8 +928,8 @@ export async function getQuestionStats(quizId: string, sectionId?: string) {
   const labelDifficulty = (pctCorrect: number, avgTime: number) => {
     let label =
       pctCorrect >= 80 ? "Easy" :
-      pctCorrect >= 60 ? "Moderate" :
-      pctCorrect >= 40 ? "Hard" : "Very Hard";
+        pctCorrect >= 60 ? "Moderate" :
+          pctCorrect >= 40 ? "Hard" : "Very Hard";
     if (avgTime >= 45 && pctCorrect < 50) label = label === "Hard" ? "Very Hard" : label;
     else if (avgTime <= 20 && pctCorrect >= 70) label = label === "Moderate" ? "Easy" : label;
     return label;
@@ -909,9 +937,9 @@ export async function getQuestionStats(quizId: string, sectionId?: string) {
 
   const prettyType = (t: string | null | undefined) => {
     const v = String(t ?? "").toLowerCase();
-    if (["mcq","multiple_choice","multiple-choice","multiple choice"].includes(v)) return "MCQ";
-    if (["true_false","true/false","truefalse","tf","true-false"].includes(v)) return "True/False";
-    if (["short_answer","short answer","sa"].includes(v)) return "Short Answer";
+    if (["mcq", "multiple_choice", "multiple-choice", "multiple choice"].includes(v)) return "MCQ";
+    if (["true_false", "true/false", "truefalse", "tf", "true-false"].includes(v)) return "True/False";
+    if (["short_answer", "short answer", "sa"].includes(v)) return "Short Answer";
     return "—";
   };
 
@@ -972,8 +1000,8 @@ export async function getScoreBuckets(quizId: string, sectionId?: string): Promi
       tq && s <= tq
         ? (s / tq) * 100
         : s <= 100
-        ? s
-        : NaN;
+          ? s
+          : NaN;
 
     if (!Number.isFinite(pct)) continue;
     pct = Math.max(0, Math.min(100, Math.round(pct * 100) / 100));
@@ -1013,7 +1041,7 @@ export async function getQuizAverageScore(quizId: string): Promise<number> {
     // Convert to percent if raw looks like "correct items"
     const pct =
       tq && raw <= tq ? (raw / tq) * 100 :
-      raw <= 100 ? raw : 0;
+        raw <= 100 ? raw : 0;
 
     sum += pct;
     n++;

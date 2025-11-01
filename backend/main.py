@@ -178,28 +178,53 @@ async def disconnect(sid):
         )
 
 # ---------- Quiz generation helpers ----------
-def generate_prompt(text: str, mcq_count: int, sa_count: int, tf_count: int) -> str:
-    total = mcq_count + sa_count + tf_count
+def generate_prompt(
+    text: str, 
+    mcq_count: int, 
+    sa_count: int, 
+    tf_count: int, 
+    idf_count: int, 
+    ess_count: int,
+    difficulty: str
+) -> str:
+    total = mcq_count + sa_count + tf_count + idf_count + ess_count
+    
+    # Difficulty instructions
+    diff_instructions = {
+        "Easy": "Questions should be straightforward, testing basic recall and understanding. Use simple language.",
+        "Intermediate": "Questions should require moderate understanding and application of concepts.",
+        "Difficult": "Questions should be challenging, requiring deep analysis, critical thinking, and synthesis of multiple concepts."
+    }
+    diff_guide = diff_instructions.get(difficulty, diff_instructions["Intermediate"])
+    
     return f"""
 You are generating a quiz STRICTLY from the supplied learning material.
+
+DIFFICULTY LEVEL: {difficulty}
+{diff_guide}
 
 Return ONLY a JSON ARRAY (no code fences, no keys outside the array, no comments), with EXACTLY {total} items:
 - First, {mcq_count} objects with "type":"mcq"
 - Then, {sa_count} objects with "type":"short_answer"
 - Then, {tf_count} objects with "type":"true_false"
+- Then, {idf_count} objects with "type":"identification"
+- Then, {ess_count} objects with "type":"essay"
 
 Schema per item:
-- type: "mcq" | "short_answer" | "true_false"
-- question: string (10–20 words, clear and grounded in the material)
-- For "mcq": choices: array of EXACTLY 4 strings (each 4–9 words, mutually exclusive, no “All/None of the above”); answer: string that EXACTLY matches one of the 4 choices.
-- For "short_answer": answer: string (1–2 sentences, 5–25 words)
+- type: "mcq" | "short_answer" | "true_false" | "identification" | "essay"
+- question: string (10–25 words, clear and grounded in the material)
+- For "mcq": choices: array of EXACTLY 4 strings (each 3-5 words, mutually exclusive, no "All/None of the above"); answer: string that EXACTLY matches one of the 4 choices.
+- For "short_answer": answer: string (1–2 sentences, 5–15 words)
 - For "true_false": answer: boolean true or false (must be a JSON boolean, not a string)
+- For "identification": answer: string (1–2 words, a specific term, name, concept, or phrase)
+- For "essay": answer: string (2–4 sentences, 20–40 words, a comprehensive model answer)
 
 Hard rules:
 - Use ONLY information present in the provided material.
 - Do NOT include any text before or after the JSON array.
 - Do NOT include code fences like ``` or any <think> tags.
 - Ensure EXACT counts. If you produce more than {total}, only the first {total} will be used; if fewer, your response will be rejected.
+- Adjust question complexity according to the difficulty level: {difficulty}.
 
 Learning Material:
 \"\"\"{text}\"\"\"
@@ -586,11 +611,27 @@ def _is_valid_tf(item: Dict[str, Any]) -> bool:
         and isinstance(item.get("question"), str)
         and isinstance(item.get("answer"), bool)
     )
+    
+def _is_valid_identification(item: Dict[str, Any]) -> bool:
+    return (
+        item.get("type") == "identification"
+        and isinstance(item.get("question"), str)
+        and isinstance(item.get("answer"), str)
+        and len(_norm_text(item.get("answer"))) > 0
+    )
+
+def _is_valid_essay(item: Dict[str, Any]) -> bool:
+    return (
+        item.get("type") == "essay"
+        and isinstance(item.get("question"), str)
+        and isinstance(item.get("answer"), str)
+        and len(_norm_text(item.get("answer"))) > 0
+    )
 
 def _filter_and_partition(items: List[Dict[str, Any]]):
     items = _normalize_items(items)
     items = _repair_items(items)
-    mcq, sa, tf = [], [], []
+    mcq, sa, tf, idf, ess = [], [], [], [], []
     for it in items:
         try:
             t = it.get("type")
@@ -600,37 +641,56 @@ def _filter_and_partition(items: List[Dict[str, Any]]):
                 sa.append(it)
             elif t == "true_false" and _is_valid_tf(it):
                 tf.append(it)
+            elif t == "identification" and _is_valid_identification(it):
+                idf.append(it)
+            elif t == "essay" and _is_valid_essay(it):
+                ess.append(it)
         except Exception:
             continue
-    return mcq, sa, tf
+    return mcq, sa, tf, idf, ess
 
-def _merge_trim_to_counts(mcq: List[Dict[str, Any]],
-                          sa: List[Dict[str, Any]],
-                          tf: List[Dict[str, Any]],
-                          need_mcq: int, need_sa: int, need_tf: int) -> List[Dict[str, Any]]:
-    return mcq[:need_mcq] + sa[:need_sa] + tf[:need_tf]
+def _merge_trim_to_counts(
+    mcq: List[Dict[str, Any]],
+    sa: List[Dict[str, Any]],
+    tf: List[Dict[str, Any]],
+    idf: List[Dict[str, Any]],
+    ess: List[Dict[str, Any]],
+    need_mcq: int, 
+    need_sa: int, 
+    need_tf: int,
+    need_idf: int,
+    need_ess: int
+) -> List[Dict[str, Any]]:
+    return mcq[:need_mcq] + sa[:need_sa] + tf[:need_tf] + idf[:need_idf] + ess[:need_ess]
 
-def _counts_satisfied(mcq, sa, tf, need_mcq, need_sa, need_tf) -> bool:
-    return len(mcq) >= need_mcq and len(sa) >= need_sa and len(tf) >= need_tf
+def _counts_satisfied(mcq, sa, tf, idf, ess, need_mcq, need_sa, need_tf, need_idf, need_ess) -> bool:
+    return (len(mcq) >= need_mcq and len(sa) >= need_sa and len(tf) >= need_tf 
+            and len(idf) >= need_idf and len(ess) >= need_ess)
 
-def _estimate_topup_tokens(missing_mcq: int, missing_sa: int, missing_tf: int) -> int:
-    # Small caps so we don't trip TPM minute limits
-    return max(300, missing_mcq * 220 + missing_sa * 120 + missing_tf * 40)
+def _estimate_topup_tokens(missing_mcq: int, missing_sa: int, missing_tf: int, missing_idf: int, missing_ess: int) -> int:
+    return max(300, missing_mcq * 220 + missing_sa * 120 + missing_tf * 40 + missing_idf * 100 + missing_ess * 180)
 
-def _top_up_generation(base_text: str,
-                       have_mcq: int, have_sa: int, have_tf: int,
-                       need_mcq: int, need_sa: int, need_tf: int) -> List[Dict[str, Any]]:
+def _top_up_generation(
+    base_text: str,
+    have_mcq: int, have_sa: int, have_tf: int, have_idf: int, have_ess: int,
+    need_mcq: int, need_sa: int, need_tf: int, need_idf: int, need_ess: int,
+    difficulty: str
+) -> List[Dict[str, Any]]:
     missing_mcq = max(0, need_mcq - have_mcq)
     missing_sa  = max(0, need_sa  - have_sa)
     missing_tf  = max(0, need_tf  - have_tf)
-    if (missing_mcq + missing_sa + missing_tf) == 0:
+    missing_idf = max(0, need_idf - have_idf)
+    missing_ess = max(0, need_ess - have_ess)
+    
+    if (missing_mcq + missing_sa + missing_tf + missing_idf + missing_ess) == 0:
         return []
-    prompt2 = generate_prompt(base_text, missing_mcq, missing_sa, missing_tf)
-    small_cap = min(1200, _estimate_topup_tokens(missing_mcq, missing_sa, missing_tf))
+    
+    prompt2 = generate_prompt(base_text, missing_mcq, missing_sa, missing_tf, missing_idf, missing_ess, difficulty)
+    small_cap = min(1200, _estimate_topup_tokens(missing_mcq, missing_sa, missing_tf, missing_idf, missing_ess))
     raw2 = call_groq(prompt2, max_tokens_override=small_cap)
     arr2 = extract_json_array(raw2)
-    mcq2, sa2, tf2 = _filter_and_partition(arr2)
-    return _merge_trim_to_counts(mcq2, sa2, tf2, missing_mcq, missing_sa, missing_tf)
+    mcq2, sa2, tf2, idf2, ess2 = _filter_and_partition(arr2)
+    return _merge_trim_to_counts(mcq2, sa2, tf2, idf2, ess2, missing_mcq, missing_sa, missing_tf, missing_idf, missing_ess)
 
 def _bool_from_text(txt: str) -> bool | None:
     t = _clean_model_output((txt or "")).strip().lower()
@@ -670,7 +730,10 @@ async def generate_quiz(
     mcq_count: int = Form(3),
     sa_count: int = Form(3),
     tf_count: int = Form(4),
-):   
+    idf_count: int = Form(0),
+    ess_count: int = Form(0),
+    difficulty: str = Form("Intermediate"),
+):
     # Save temp upload
     suffix = Path(file.filename).suffix or ".pdf"
     temp_path = Path(f"temp_{uuid.uuid4()}{suffix}")
@@ -681,8 +744,8 @@ async def generate_quiz(
         # Extract & prepare prompt/input
         text = extract_text_from_file(str(temp_path))
         safe_text = truncate_text(text)
-        prompt = generate_prompt(safe_text, mcq_count, sa_count, tf_count)
-        requested_total = mcq_count + sa_count + tf_count
+        prompt = generate_prompt(safe_text, mcq_count, sa_count, tf_count, idf_count, ess_count, difficulty)
+        requested_total = mcq_count + sa_count + tf_count + idf_count + ess_count
 
         # 1) Primary generation
         try:
@@ -701,37 +764,38 @@ async def generate_quiz(
             return JSONResponse(content={"error": "Failed to parse JSON from model output."}, status_code=500)
 
         # 3) Normalize/Repair/Validate and partition
-        mcq, sa, tf = _filter_and_partition(arr)
+        mcq, sa, tf, idf, ess = _filter_and_partition(arr)
 
         # 4) If under-produced, try ONE small top-up call for missing counts
-        if not _counts_satisfied(mcq, sa, tf, mcq_count, sa_count, tf_count):
+        if not _counts_satisfied(mcq, sa, tf, idf, ess, mcq_count, sa_count, tf_count, idf_count, ess_count):
             try:
                 extras = _top_up_generation(
                     base_text=safe_text,
-                    have_mcq=len(mcq), have_sa=len(sa), have_tf=len(tf),
-                    need_mcq=mcq_count, need_sa=sa_count, need_tf=tf_count
+                    have_mcq=len(mcq), have_sa=len(sa), have_tf=len(tf), have_idf=len(idf), have_ess=len(ess),
+                    need_mcq=mcq_count, need_sa=sa_count, need_tf=tf_count, need_idf=idf_count, need_ess=ess_count,
+                    difficulty=difficulty
                 )
                 if extras:
-                    ex_mcq, ex_sa, ex_tf = _filter_and_partition(extras)
-                    mcq += ex_mcq; sa += ex_sa; tf += ex_tf
+                    ex_mcq, ex_sa, ex_tf, ex_idf, ex_ess = _filter_and_partition(extras)
+                    mcq += ex_mcq; sa += ex_sa; tf += ex_tf; idf += ex_idf; ess += ex_ess
             except Exception as e:
                 log.warning("Top-up generation failed: %s", e)
 
-        # 5) Final enforcement: trim to EXACT requested counts (order MCQ->SA->TF)
-        final_items = _merge_trim_to_counts(mcq, sa, tf, mcq_count, sa_count, tf_count)
+        # 5) Final enforcement: trim to EXACT requested counts
+        final_items = _merge_trim_to_counts(mcq, sa, tf, idf, ess, mcq_count, sa_count, tf_count, idf_count, ess_count)
 
         # 6) If STILL short, fail loudly so the UI can retry or adjust counts
         if len(final_items) != requested_total:
             log.error(
-                "Final count mismatch. Have: %d (mcq=%d sa=%d tf=%d); need: %d",
-                len(final_items), len(mcq), len(sa), len(tf), requested_total
+                "Final count mismatch. Have: %d (mcq=%d sa=%d tf=%d idf=%d ess=%d); need: %d",
+                len(final_items), len(mcq), len(sa), len(tf), len(idf), len(ess), requested_total
             )
             return JSONResponse(
                 content={"error": "Model returned fewer valid items than requested. Please retry or reduce counts."},
                 status_code=502
             )
 
-        # ✅ Success — return ONLY the array
+        # ✅ Success – return ONLY the array
         return JSONResponse(content=final_items)
 
     finally:
@@ -745,6 +809,7 @@ def grade_short_answer(payload: dict = Body(...)):
     """
     Body: { "question_id": "<uuid>", "student_answer": "<text>" }
     Returns: { "is_correct": true|false }
+    Handles: short_answer, identification, and essay types
     """
     qid = (payload or {}).get("question_id")
     student = (payload or {}).get("student_answer") or ""
@@ -762,19 +827,46 @@ def grade_short_answer(payload: dict = Body(...)):
         log.error("DB fetch failed: %s", e)
         return JSONResponse({"is_correct": False, "error": "db_error"}, status_code=500)
 
+    question_type = row.get("type", "")
     ref = (row.get("correct_answer") or "").strip()
     question_text = (row.get("text") or "").strip()
+
     if not ref:
-        # if no reference, treat as ungradable -> false
         return {"is_correct": False}
 
-    # 2) ask Groq; cap tokens to 3 to keep it tiny
-    prompt = f"""
+    # 2) Handle identification with exact normalized matching
+    if question_type == "identification":
+        def normalize_id(s: str) -> str:
+            """Remove all non-alphanumeric chars and lowercase"""
+            return re.sub(r'[^a-z0-9]', '', s.lower())
+        
+        student_norm = normalize_id(student)
+        ref_norm = normalize_id(ref)
+        
+        return {"is_correct": bool(student_norm and ref_norm and student_norm == ref_norm)}
+
+    # 3) Build grading prompt for essay/short_answer
+    if question_type == "essay":
+        prompt = f"""
+You are a grader for essay questions.
+
+Evaluate if the student's essay covers the main points of the reference.
+If the student's essay addresses 40% or more of the key aspects of the reference, mark it correct.
+
+Output **ONLY** the word TRUE or FALSE. No punctuation. No explanation.
+
+QUESTION: {question_text}
+REFERENCE: {ref}
+STUDENT ESSAY: {student}
+
+Answer (ONLY TRUE or FALSE):
+""".strip()
+    else:  # short_answer
+        prompt = f"""
 You are a strict grader for short-answer quizzes.
 
-Decide if the STUDENT answer expresses the **same essential meaning**
-as the REFERENCE answer for this QUESTION. Paraphrasing and synonyms are OK,
-but key facts must match and there must be no contradictions.
+Evaluate if the student's answer covers the main points of the reference.
+If the student's answer addresses 40% or more of the key aspects of the reference, mark it correct.
 
 Output **ONLY** the word TRUE or FALSE. No punctuation. No explanation.
 
@@ -785,11 +877,12 @@ STUDENT: {student}
 Answer (ONLY TRUE or FALSE):
 """.strip()
 
+    # 3) Call Groq for grading
     try:
         raw = call_groq(prompt, max_tokens_override=3)
         val = _bool_from_text(raw)
         if val is None:
-            # model replied weirdly — fall back to a cheap lexical check
+            # model replied weirdly – fall back to a cheap lexical check
             val = _lexical_backup(student, ref)
         return {"is_correct": bool(val)}
     except Exception as e:

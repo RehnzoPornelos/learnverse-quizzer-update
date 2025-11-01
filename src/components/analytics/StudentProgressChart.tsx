@@ -1,15 +1,5 @@
 // StudentProgressChart.tsx
-// - True 3D chart via Plotly (rotate/zoom)
-// - k = 5 K-Means on [Avg Score %, Avg Time per Q (s), Total Quizzes] with z‑score scaling
-// - Semantic labels defined by score bands and cohort median pacing:
-//     High Achiever         = score ≥ 90% and time < median
-//     Slow High Achiever    = score ≥ 90% and time ≥ median
-//     Guesser               = score < 75% and time < median
-//     Struggler             = score < 75% and time ≥ median
-//     On Track              = otherwise (moderate)
-// - Section filter + details table kept
-
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "plotly.js-dist-min";
 import { supabase } from "@/integrations/supabase/client";
@@ -58,12 +48,6 @@ type StudentFeature = {
   avgTimePerQuestion: number; // seconds
 };
 
-// Extend DisplayLabel to include five semantic categories.  We now have
-// a distinct label for students who achieve high scores but take longer
-// than the cohort median to complete questions (“Slow High Achiever”).
-// Existing labels remain: High Achiever, Guesser, Struggler, and
-// On‑Track.  These correspond to performance quadrants and are used
-// throughout the component for colouring and filtering.
 type DisplayLabel =
   | "High Achiever"
   | "Slow High Achiever"
@@ -72,25 +56,23 @@ type DisplayLabel =
   | "On Track";
 
 type ClusteredStudent = StudentFeature & {
-  cluster: number; // numeric K-Means cluster (not shown)
-  displayLabel: DisplayLabel; // your 4-quadrant label (shown)
+  cluster: number;
+  displayLabel: DisplayLabel;
 };
 
-type Props = { selectedSection?: string | null };
+// Flexible prop: accept single string, array of strings, or null
+type Props = { selectedSection?: string | string[] | null };
 
 // ----- Colours for your 5 semantic labels -----
-// We assign a distinct colour to each label to aid visual separation
-// in both the table and the 3D scatter plot.  Feel free to tweak
-// colours to better fit your branding or accessibility guidelines.
 const LABEL_COLORS: Record<DisplayLabel, string> = {
-  "High Achiever": "#00A86B", // green
-  "Slow High Achiever": "#1E90FF", // blue
-  Guesser: "#A855F7", // purple
-  Struggler: "#EF4444", // red
-  "On Track": "#F59E0B", // amber
+  "High Achiever": "#00A86B",
+  "Slow High Achiever": "#1E90FF",
+  Guesser: "#A855F7",
+  Struggler: "#EF4444",
+  "On Track": "#F59E0B",
 };
 
-// ---------- helpers ----------
+// helpers
 const toNum = (v: any) => {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
@@ -99,7 +81,7 @@ const round = (n: number, p = 2) => Math.round(n * 10 ** p) / 10 ** p;
 const avg = (xs: number[]) =>
   xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
 
-// ---------- Standardization (z-score) ----------
+// Standardization (z-score)
 type Std = { mean: number[]; std: number[] };
 function fitStd(X: number[][]): Std {
   const d = X[0].length,
@@ -116,7 +98,7 @@ function fitStd(X: number[][]): Std {
 const transformStd = (X: number[][], s: Std) =>
   X.map((r) => r.map((v, j) => (v - s.mean[j]) / s.std[j]));
 
-// ---------- K-Means (ND) ----------
+// K-Means ND
 function euclidND(a: number[], b: number[]) {
   let s = 0;
   for (let i = 0; i < a.length; i++) {
@@ -171,35 +153,28 @@ function kmeansND(X: number[][], k: number, maxIter = 120) {
   return { labels, centroids };
 }
 
-// ---------- CSV helpers ----------
+// CSV helpers
 function csvEscape(v: any): string {
   if (v === null || v === undefined) return "";
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
-
 function toCSV(rows: Record<string, any>[], columns?: string[]): string {
   if (!rows || rows.length === 0) return "";
-
-  // Determine columns explicitly (avoid reduce generic weirdness)
   let keys: string[];
   if (columns && columns.length) {
     keys = columns;
   } else {
     const keySet = new Set<string>();
-    for (const r of rows) {
-      for (const k of Object.keys(r)) keySet.add(k);
-    }
+    for (const r of rows) for (const k of Object.keys(r)) keySet.add(k);
     keys = Array.from(keySet);
   }
-
   const header = keys.map(csvEscape).join(",");
   const body = rows
     .map((r) => keys.map((k) => csvEscape(r[k])).join(","))
     .join("\n");
   return header + "\n" + body;
 }
-
 function quantile(xs: number[], q: number) {
   if (!xs.length) return 0;
   const a = [...xs].sort((p, r) => p - r);
@@ -211,13 +186,7 @@ function quantile(xs: number[], q: number) {
   return a[lo] * (1 - h) + a[hi] * h;
 }
 
-// ----- Label assignment based on score and pacing -----
-// Assigns a semantic label to a student given their average score (in %),
-// average time per question (in seconds) and the cohort’s median time.
-// High achievers score at least 90%.  Those scoring >=90% but taking
-// longer than the median are “Slow High Achievers”.  Students scoring
-// below 75% are divided into “Guessers” (fast but low accuracy) and
-// “Strugglers” (slow and low accuracy).  Everyone else is “On Track”.
+// Semantic label
 function semanticLabel(
   scorePct: number,
   timePerQ: number,
@@ -268,8 +237,28 @@ const ColumnSorter = ({
 );
 
 export default function StudentProgressChart({
-  selectedSection = "all",
+  selectedSection = null,
 }: Props) {
+  // Derive both forms from the flexible prop:
+  // - selectedSectionIds: string[] | null -> used for .in() queries
+  // - selectedSectionSingle: string | null -> used for single eq filter / badge
+  const selectedSectionIds: string[] | null = useMemo(() => {
+    if (selectedSection == null) return null;
+    return Array.isArray(selectedSection)
+      ? selectedSection.length
+        ? selectedSection
+        : null
+      : [selectedSection];
+  }, [selectedSection]);
+
+  const selectedSectionSingle: string | null = useMemo(() => {
+    if (selectedSection == null) return null;
+    if (typeof selectedSection === "string") return selectedSection;
+    if (Array.isArray(selectedSection) && selectedSection.length === 1)
+      return selectedSection[0];
+    return null;
+  }, [selectedSection]);
+
   const [isRunning, setIsRunning] = useState(false);
   const [rows, setRows] = useState<ClusteredStudent[]>([]);
   const [kUsed, setKUsed] = useState<number | null>(null);
@@ -280,7 +269,7 @@ export default function StudentProgressChart({
   );
   const [labelFilter, setLabelFilter] = useState<"ALL" | DisplayLabel>("ALL");
   const { user } = useAuth();
-  // state (put with your other useState hooks)
+
   type SortKey =
     | "displayLabel"
     | "studentName"
@@ -313,11 +302,8 @@ export default function StudentProgressChart({
       if (!quizIds.length)
         throw new Error("No published quizzes for this professor.");
 
-      // 2) Determine which student keys (student_name_norm|section_id) were clustered
+      // clustered keys and included sections
       const clusteredKeys = new Set(rows.map((r) => r.studentKey));
-      const clusteredStudentNorms = new Set(
-        rows.map((r) => r.studentKey.split("|")[0])
-      );
       const clusteredSectionIds = new Set(
         rows.map((r) => r.sectionId).filter(Boolean) as string[]
       );
@@ -334,8 +320,14 @@ export default function StudentProgressChart({
             .select("*")
             .in("quiz_id", quizIds)
             .range(from, to);
-          if (selectedSection && selectedSection !== "all")
-            q = q.eq("section_id", selectedSection);
+
+          // handle both single and array forms
+          if (selectedSectionSingle && selectedSectionSingle !== "all") {
+            q = q.eq("section_id", selectedSectionSingle);
+          } else if (selectedSectionIds && selectedSectionIds.length > 0) {
+            q = q.in("section_id", selectedSectionIds);
+          }
+
           const { data, error } = await q;
           if (error) throw error;
           const batch = data ?? [];
@@ -353,7 +345,6 @@ export default function StudentProgressChart({
         return clusteredKeys.has(key);
       });
 
-      // collect sectionIds/quizIds actually included
       const sectionIdsSet = new Set<string>();
       const quizIdsSet = new Set<string>();
       aspIncluded.forEach((r) => {
@@ -373,8 +364,13 @@ export default function StudentProgressChart({
             .select("*")
             .in("quiz_id", Array.from(quizIdsSet))
             .range(from, to);
-          if (selectedSection && selectedSection !== "all")
-            q = q.eq("section_id", selectedSection);
+
+          if (selectedSectionSingle && selectedSectionSingle !== "all") {
+            q = q.eq("section_id", selectedSectionSingle);
+          } else if (selectedSectionIds && selectedSectionIds.length > 0) {
+            q = q.in("section_id", selectedSectionIds);
+          }
+
           const { data, error } = await q;
           if (error) throw error;
           const batch = data ?? [];
@@ -392,7 +388,7 @@ export default function StudentProgressChart({
         return clusteredKeys.has(key);
       });
 
-      // 5) class_sections for the sections in ASP
+      // class_sections for the sections in ASP
       let sectionsRows: any[] = [];
       if (sectionIdsSet.size > 0) {
         const { data: secRows, error: secErr } = await supabase
@@ -403,11 +399,10 @@ export default function StudentProgressChart({
         sectionsRows = secRows ?? [];
       }
 
-      // 6) quizzes for the quizzes in ASP (re-use quizRows filtered)
       const quizzesIncluded =
         quizRows?.filter((q) => quizIdsSet.has(String(q.id))) ?? [];
 
-      // 7) quiz_questions for the responses’ question_ids
+      // quiz_questions for the responses’ question_ids
       const qIdsSet = new Set<string>();
       qrIncluded.forEach((r) => {
         if (r.question_id) qIdsSet.add(String(r.question_id));
@@ -423,8 +418,7 @@ export default function StudentProgressChart({
         questionRows = qqRows ?? [];
       }
 
-      // ---- Per-question summary from qrIncluded ----
-      // average time spent (seconds) and accuracy (% correct)
+      // per-question summary
       type QAgg = {
         quiz_id: string;
         n: number;
@@ -432,7 +426,6 @@ export default function StudentProgressChart({
         correct: number;
       };
       const aggByQ = new Map<string, QAgg>();
-
       for (const r of qrIncluded) {
         const qid = String(r.question_id);
         const quizId = String(r.quiz_id);
@@ -451,7 +444,6 @@ export default function StudentProgressChart({
         aggByQ.set(qid, cur);
       }
 
-      // Lookups to attach question text/type
       const questionById = new Map<string, any>();
       (questionRows ?? []).forEach((qq: any) =>
         questionById.set(String(qq.id), qq)
@@ -473,12 +465,9 @@ export default function StudentProgressChart({
           accuracy_percent: Number(accuracy.toFixed(2)),
         };
       });
-      // Sort hardest first (lowest accuracy)
       qrSummary.sort((p, r) => p.accuracy_percent - r.accuracy_percent);
 
-      // 8) clustering_results table rows from our 'rows' state (all students, not filtered by UI search)
       const clusteringResults = rows.map((r) => ({
-        Cluster: r.displayLabel,
         Student: r.studentName,
         Section: r.sectionId
           ? sectionCodeMap.get(r.sectionId) ?? r.sectionId
@@ -486,32 +475,29 @@ export default function StudentProgressChart({
         "Quizzes Taken": r.totalQuizzes,
         "Avg Pace (s/Q)": Number(r.avgTimePerQuestion.toFixed(2)),
         "Avg Score (%)": Number(r.avgScorePct.toFixed(2)),
+        Cluster: r.displayLabel,
       }));
 
-      // ---------- Write XLSX with one sheet per table ----------
       const wb = XLSX.utils.book_new();
-
       const safeSheet = (name: string, rows: any[], columns?: string[]) => {
-        const data = rows && rows.length ? rows : [{}]; // avoid empty-sheet errors
+        const data = rows && rows.length ? rows : [{}];
         const ws =
           columns && columns.length
             ? XLSX.utils.json_to_sheet(rows, { header: columns })
             : XLSX.utils.json_to_sheet(data);
-        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31)); // Excel name limit
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
       };
 
-      // Sheets in a stable order
       safeSheet("clustering_results", clusteringResults, [
-        "Cluster",
         "Student",
         "Section",
         "Quizzes Taken",
         "Avg Pace (s/Q)",
         "Avg Score (%)",
+        "Cluster",
       ]);
-      safeSheet("analytics_student_performance", aspIncluded);
 
-      // quiz_responses may be huge, so only include if < 1000 rows
+      safeSheet("analytics_student_performance", aspIncluded);
       if (qrIncluded.length <= 1000) {
         safeSheet("quiz_responses", qrIncluded);
       } else {
@@ -521,7 +507,6 @@ export default function StudentProgressChart({
           },
         ]);
       }
-
       safeSheet("class_sections", sectionsRows);
       safeSheet("quizzes", quizzesIncluded);
       safeSheet("quiz_questions", questionRows);
@@ -537,24 +522,16 @@ export default function StudentProgressChart({
         "accuracy_percent",
       ]);
 
-      /* Optional: a tiny README sheet with schema notes / version
-      safeSheet("README", [
-        { note: "Dataset generated by StudentProgressChart → Export Results" },
-        {
-          note: "One sheet per table. Use 'clustering_results' as entrypoint for recommendations.",
-        },
-        { note: "Version: 1.0" },
-      ]); */
-
-      const stamp = dayjs().format("YYYYMMDD_HHmmss"); // or your Date() fallback
+      const stamp = dayjs().format("YYYYMMDD_HHmmss");
       XLSX.writeFile(wb, `Student_Cluster_Data_${stamp}.xlsx`);
     } catch (err) {
       console.error("Export failed:", err);
       alert("Export failed. Check console for details.");
     }
-  }, [user?.id, rows, selectedSection, sectionCodeMap]);
+    // include deps that the callback uses
+  }, [user?.id, rows, selectedSection, selectedSectionIds, sectionCodeMap]);
 
-  // helpers for sorting
+  // sorting helpers
   const getSectionCode = (sectionId?: string | null) =>
     sectionId ? sectionCodeMap.get(sectionId) ?? "" : "";
 
@@ -591,6 +568,7 @@ export default function StudentProgressChart({
     });
   };
 
+  // main run - depends on selectedSectionIds (array) and user
   const run = useCallback(async () => {
     setIsRunning(true);
     setRows([]);
@@ -637,7 +615,7 @@ export default function StudentProgressChart({
       for (const r of sectionRows ?? []) sMap.set(String(r.id), String(r.code));
       setSectionCodeMap(sMap);
 
-      // C) analytics (paged)
+      // C) analytics (paged) - filter by selected sections (use selectedSectionIds)
       const perf: AnyRow[] = [];
       const pageSize = 1000;
       let from = 0,
@@ -648,8 +626,11 @@ export default function StudentProgressChart({
           .select("*")
           .in("quiz_id", quizIds)
           .range(from, to);
-        if (selectedSection && selectedSection !== "all")
-          q = q.eq("section_id", selectedSection);
+
+        if (selectedSectionIds && selectedSectionIds.length > 0) {
+          q = q.in("section_id", selectedSectionIds);
+        }
+
         const { data, error } = await q;
         if (error) throw error;
         const batch = (data as AnyRow[]) ?? [];
@@ -717,18 +698,11 @@ export default function StudentProgressChart({
         return;
       }
 
-      // ----- Cohort quartiles for pacing -----
       const times = feats
         .map((f) => f.avgTimePerQuestion)
         .filter((n) => Number.isFinite(n));
-
-      // Compute the cohort’s median (Q2) of the raw average times.  This
-      // median defines the boundary between “fast” and “slow” pacing in
-      // the semanticLabel() function.  We only compute Q2 since Q1 and
-      // Q3 are not currently used for labelling.
       const q2Time = quantile(times, 0.5);
 
-      // ===== 3D K-Means on standardized [score, time, quizzes] =====
       const Xraw = feats.map((f) => [
         f.avgScorePct,
         f.avgTimePerQuestion,
@@ -737,9 +711,6 @@ export default function StudentProgressChart({
       const std = fitStd(Xraw);
       const X = transformStd(Xraw, std);
 
-      // We set k to 5 to capture more nuanced clusters.  When the number
-      // of data points is too small, k is clamped to ensure sensible
-      // behaviour (at least two clusters and at most n-1).  See below.
       const kDesired = 5;
       const k = Math.min(kDesired, Math.max(2, feats.length - 1));
       const { labels, centroids } = kmeansND(X, k);
@@ -747,10 +718,6 @@ export default function StudentProgressChart({
       setCentroids(centroids);
       setCounts({ students: feats.length, quizzes: quizIds.length });
 
-      // Assign semantic labels based on median pacing and absolute score bands.
-      // See semanticLabel() for rules.  Note that labeling is independent of
-      // the K-Means clustering; clusters partition the data in feature space
-      // but do not determine the final label.
       const labeled: ClusteredStudent[] = feats.map((f, i) => {
         const displayLabel = semanticLabel(
           f.avgScorePct,
@@ -770,7 +737,13 @@ export default function StudentProgressChart({
     } finally {
       setIsRunning(false);
     }
-  }, [selectedSection, user?.id]);
+  }, [selectedSectionIds, user?.id]);
+
+  useEffect(() => {
+    if (user?.id) {
+      run();
+    }
+  }, [run, user?.id]);
 
   const rowsToShow = useMemo(() => {
     const q = nameQuery.trim().toLowerCase();
@@ -778,15 +751,12 @@ export default function StudentProgressChart({
       labelFilter === "ALL"
         ? rows
         : rows.filter((r) => r.displayLabel === labelFilter);
-
     const byName = q
       ? filtered.filter((r) => r.studentName.toLowerCase().includes(q))
       : filtered;
-
     return sortRows(byName);
   }, [rows, labelFilter, nameQuery, sort]);
 
-  // ----- Plotly 3D data traces by label -----
   const traces = useMemo(() => {
     const byLabel: Record<DisplayLabel, ClusteredStudent[]> = {
       "High Achiever": [],
@@ -797,9 +767,6 @@ export default function StudentProgressChart({
     };
     for (const r of rows) byLabel[r.displayLabel].push(r);
 
-    // Define an ordering for the legend.  This array controls the
-    // sequencing of traces in the plot and can be adjusted to suit
-    // pedagogical priorities.
     const labelsOrder: DisplayLabel[] = [
       "High Achiever",
       "Slow High Achiever",
@@ -837,19 +804,19 @@ export default function StudentProgressChart({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>
-            K-Means Student Performance
-          </CardTitle>
+          <CardTitle>K-Means Student Performance</CardTitle>
           <CardDescription>
-            X-Axis = Avg Score (%)  |  Y-Axis = Avg Time per Question (s)  |  Z-Axis = Quizzes Taken.
+            X-Axis = Avg Score (%) | Y-Axis = Avg Time per Question (s) | Z-Axis
+            = Quizzes Taken.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant="secondary">
               Section:{" "}
-              {selectedSection && selectedSection !== "all"
-                ? sectionCodeMap.get(selectedSection) ?? selectedSection
+              {selectedSectionSingle && selectedSectionSingle !== "all"
+                ? sectionCodeMap.get(selectedSectionSingle) ??
+                  selectedSectionSingle
                 : "All"}
             </Badge>
             {kUsed != null && <Badge>k = {kUsed}</Badge>}
@@ -857,18 +824,7 @@ export default function StudentProgressChart({
             <Badge variant="outline">Quizzes: {counts.quizzes}</Badge>
 
             <Button onClick={run} disabled={isRunning}>
-              {isRunning ? "Clustering…" : "Run Clustering"}
-            </Button>
-
-            <Button
-              variant="outline"
-              className="flex items-center gap-2"
-              onClick={exportResults}
-              disabled={isRunning || rows.length === 0}
-              title={rows.length === 0 ? "Run clustering first" : "Export CSV"}
-            >
-              <Download className="h-4 w-4" />
-              Export Results
+              {isRunning ? "Clustering…" : "Refresh Clustering"}
             </Button>
           </div>
 
@@ -880,7 +836,6 @@ export default function StudentProgressChart({
                   const isDark =
                     typeof document !== "undefined" &&
                     document.documentElement.classList.contains("dark");
-
                   const colors = {
                     grid: isDark ? "#2A2F3A" : "#D6DEE8",
                     axis: isDark ? "#C9D1E0" : "#334155",
@@ -898,12 +853,10 @@ export default function StudentProgressChart({
                     plot_bgcolor: "transparent",
                     uirevision: "grid-theme",
                     font: { color: colors.axis },
-
                     scene: {
                       bgcolor: colors.sceneBg,
-
                       xaxis: {
-                        title: { text: "AVG Score (%)" }, // <-- important
+                        title: { text: "AVG Score (%)" },
                         showbackground: true,
                         backgroundcolor: colors.plane,
                         gridcolor: colors.grid,
@@ -918,7 +871,7 @@ export default function StudentProgressChart({
                         mirror: true,
                       },
                       yaxis: {
-                        title: { text: "AVG Time per Question (s)" }, // <-- important
+                        title: { text: "AVG Time per Question (s)" },
                         showbackground: true,
                         backgroundcolor: colors.plane,
                         gridcolor: colors.grid,
@@ -933,7 +886,7 @@ export default function StudentProgressChart({
                         mirror: true,
                       },
                       zaxis: {
-                        title: { text: "Quizzes Taken" }, // <-- important
+                        title: { text: "Quizzes Taken" },
                         showbackground: true,
                         backgroundcolor: colors.plane,
                         gridcolor: colors.grid,
@@ -947,10 +900,8 @@ export default function StudentProgressChart({
                         color: colors.axis,
                         mirror: true,
                       },
-
                       camera: { eye: { x: 1.6, y: 1.4, z: 0.9 } },
                     },
-
                     legend: {
                       orientation: "h",
                       x: 0.5,
@@ -996,7 +947,9 @@ export default function StudentProgressChart({
               <SelectContent>
                 <SelectItem value="ALL">All labels</SelectItem>
                 <SelectItem value="High Achiever">High Achiever</SelectItem>
-                <SelectItem value="Slow High Achiever">Slow High Achiever</SelectItem>
+                <SelectItem value="Slow High Achiever">
+                  Slow High Achiever
+                </SelectItem>
                 <SelectItem value="Guesser">Guesser</SelectItem>
                 <SelectItem value="Struggler">Struggler</SelectItem>
                 <SelectItem value="On Track">On Track</SelectItem>
@@ -1015,28 +968,6 @@ export default function StudentProgressChart({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {/* Cluster */}
-                    <TableHead>
-                      <div className="flex items-center gap-2">
-                        Cluster
-                        <ColumnSorter
-                          onAsc={() =>
-                            setSort({ key: "displayLabel", dir: "asc" })
-                          }
-                          onDesc={() =>
-                            setSort({ key: "displayLabel", dir: "desc" })
-                          }
-                          activeAsc={
-                            sort.key === "displayLabel" && sort.dir === "asc"
-                          }
-                          activeDesc={
-                            sort.key === "displayLabel" && sort.dir === "desc"
-                          }
-                        />
-                      </div>
-                    </TableHead>
-
-                    {/* Student */}
                     <TableHead>
                       <div className="flex items-center gap-2">
                         Student
@@ -1057,7 +988,6 @@ export default function StudentProgressChart({
                       </div>
                     </TableHead>
 
-                    {/* Section */}
                     <TableHead>
                       <div className="flex items-center gap-2">
                         Section
@@ -1078,7 +1008,6 @@ export default function StudentProgressChart({
                       </div>
                     </TableHead>
 
-                    {/* Quizzes Taken */}
                     <TableHead className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         Quizzes Taken
@@ -1099,7 +1028,6 @@ export default function StudentProgressChart({
                       </div>
                     </TableHead>
 
-                    {/* Avg Pace */}
                     <TableHead className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         Avg Pace (s/Q)
@@ -1122,7 +1050,6 @@ export default function StudentProgressChart({
                       </div>
                     </TableHead>
 
-                    {/* Avg Score */}
                     <TableHead className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         Avg Score (%)
@@ -1142,22 +1069,32 @@ export default function StudentProgressChart({
                         />
                       </div>
                     </TableHead>
+
+                    <TableHead>
+                      <div className="flex items-center gap-2">
+                        Cluster
+                        <ColumnSorter
+                          onAsc={() =>
+                            setSort({ key: "displayLabel", dir: "asc" })
+                          }
+                          onDesc={() =>
+                            setSort({ key: "displayLabel", dir: "desc" })
+                          }
+                          activeAsc={
+                            sort.key === "displayLabel" && sort.dir === "asc"
+                          }
+                          activeDesc={
+                            sort.key === "displayLabel" && sort.dir === "desc"
+                          }
+                        />
+                      </div>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody>
                   {rowsToShow.map((s) => (
                     <TableRow key={`${s.studentKey}-${s.cluster}`}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="inline-block w-3 h-3 rounded-full"
-                            style={{ background: LABEL_COLORS[s.displayLabel] }}
-                          />
-                          <span>{s.displayLabel}</span>
-                        </div>
-                      </TableCell>
-
                       <TableCell className="font-medium">
                         {s.studentName}
                       </TableCell>
@@ -1178,6 +1115,16 @@ export default function StudentProgressChart({
 
                       <TableCell className="text-right">
                         {s.avgScorePct.toFixed(2)}
+                      </TableCell>
+
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="inline-block w-3 h-3 rounded-full"
+                            style={{ background: LABEL_COLORS[s.displayLabel] }}
+                          />
+                          <span>{s.displayLabel}</span>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

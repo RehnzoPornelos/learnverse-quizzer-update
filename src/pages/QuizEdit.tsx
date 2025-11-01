@@ -1,22 +1,22 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
-import Navbar from '@/components/layout/Navbar';
-import { getQuizWithQuestions, saveQuiz } from '@/services/quizService';
+import Navbar from "@/components/layout/Navbar";
+import { getQuizWithQuestions, saveQuiz } from "@/services/quizService";
 import { Button } from "@/components/ui/button";
 import { Loader2, Save, ArrowLeft, Shuffle } from "lucide-react";
-import TabPreviewContent from '@/components/quiz/TabPreviewContent';
-import { Switch } from '@/components/ui/switch';
+import TabPreviewContent from "@/components/quiz/TabPreviewContent";
+import { Switch } from "@/components/ui/switch";
 
 // ⬇️ sections service helpers
 import {
   getQuizSectionCodes,
   updateQuizSectionsByCodes,
-} from '@/services/quizService';
+} from "@/services/quizService";
 
 // ⬇️ NEW: editor in controlled mode
-import ClassSectionsEditor from '@/components/quiz/ClassSectionsEditor';
+import ClassSectionsEditor from "@/components/quiz/ClassSectionsEditor";
 
 const QuizEdit = () => {
   const { id } = useParams<{ id: string }>();
@@ -25,7 +25,9 @@ const QuizEdit = () => {
   const [questions, setQuestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(null);
+  const [quizDurationSeconds, setQuizDurationSeconds] = useState<number | null>(
+    null
+  );
 
   // Activation toggle state (LOCAL ONLY until Save)
   const [isCodeActive, setIsCodeActive] = useState<boolean>(false);
@@ -57,7 +59,7 @@ const QuizEdit = () => {
         // Normalize questions for editor
         const uiQuestions = (quizData.questions || []).map((q: any) => {
           let uiType = q.type;
-          if (q.type === 'multiple_choice') uiType = 'mcq';
+          if (q.type === "multiple_choice") uiType = "mcq";
 
           const uiQuestion: any = {
             id: q.id,
@@ -66,15 +68,24 @@ const QuizEdit = () => {
             choices: Array.isArray(q.options) ? q.options : [],
           };
 
-          if (uiType === 'mcq') {
-            uiQuestion.answer = q.correct_answer ?? '';
-          } else if (uiType === 'true_false') {
+          if (uiType === "mcq") {
+            uiQuestion.answer = q.correct_answer ?? "";
+          } else if (uiType === "true_false") {
             const ans = q.correct_answer;
-            if (typeof ans === 'boolean') uiQuestion.answer = ans ? 'True' : 'False';
-            else if (typeof ans === 'string') uiQuestion.answer = ans;
-            else uiQuestion.answer = '';
+            if (typeof ans === "boolean")
+              uiQuestion.answer = ans ? "True" : "False";
+            else if (typeof ans === "string") uiQuestion.answer = ans;
+            else uiQuestion.answer = "";
+          } else if (uiType === "identification") {
+            uiQuestion.answer = q.correct_answer ?? "";
+            delete uiQuestion.choices;
+          } else if (uiType === "essay") {
+            uiQuestion.answer = q.correct_answer ?? "";
+            delete uiQuestion.choices;
           } else {
-            uiQuestion.answer = q.correct_answer ?? '';
+            // short_answer or unknown
+            uiQuestion.answer = q.correct_answer ?? "";
+            delete uiQuestion.choices;
           }
           return uiQuestion;
         });
@@ -85,11 +96,13 @@ const QuizEdit = () => {
         // hydrate toggles
         setIsCodeActive(Boolean((quizData as any).is_code_active));
         setActivationDirty(false);
-        setIsRumbled(Boolean((quizData as { is_rumbled?: boolean }).is_rumbled));
+        setIsRumbled(
+          Boolean((quizData as { is_rumbled?: boolean }).is_rumbled)
+        );
         setRumbledDirty(false);
       } catch (error) {
-        console.error('Error fetching quiz:', error);
-        toast.error('Failed to load quiz');
+        console.error("Error fetching quiz:", error);
+        toast.error("Failed to load quiz");
       } finally {
         setLoading(false);
       }
@@ -128,32 +141,47 @@ const QuizEdit = () => {
       setSaving(true);
 
       // 1) Persist section links FIRST
-      const quizId = quiz.id || id || '';
+      const quizId = quiz.id || id || "";
       await updateQuizSectionsByCodes(quizId, sectionCodes);
 
       // 2) Normalize questions and save quiz metadata
       const dbQuestions = questions.map((q: any, index: number) => {
-        let dbType = q.type === 'mcq' ? 'multiple_choice' : q.type;
-        const allowed = ['mcq', 'true_false', 'short_answer'];
-        if (!allowed.includes(dbType)) dbType = 'mcq';
+        let dbType = q.type === "mcq" ? "multiple_choice" : q.type;
+        const allowed = [
+          "mcq",
+          "true_false",
+          "short_answer",
+          "identification",
+          "essay",
+        ];
+        if (!allowed.includes(dbType)) dbType = "mcq";
 
         const row: any = {
           id: q.id || undefined,
-          text: q.question ?? '',
+          text: q.question ?? "",
           type: dbType,
           order_position: index,
         };
 
-        if (dbType === 'mcq') {
+        if (dbType === "mcq") {
           row.options = Array.isArray(q.choices) ? q.choices : [];
-          row.correct_answer = q.answer ?? '';
-        } else if (dbType === 'true_false') {
+          row.correct_answer = q.answer ?? "";
+        } else if (dbType === "true_false") {
           row.options = null;
           row.correct_answer =
-            typeof q.answer === 'string' ? q.answer.toLowerCase() === 'true' : !!q.answer;
-        } else {
+            typeof q.answer === "string"
+              ? q.answer.toLowerCase() === "true"
+              : !!q.answer;
+        } else if (dbType === "identification") {
           row.options = null;
-          row.correct_answer = q.answer ?? '';
+          row.correct_answer = q.answer ?? "";
+        } else if (dbType === "essay") {
+          row.options = null;
+          row.correct_answer = q.answer ?? "";
+        } else {
+          // short_answer or default
+          row.options = null;
+          row.correct_answer = q.answer ?? "";
         }
 
         return row;
@@ -163,7 +191,7 @@ const QuizEdit = () => {
         {
           id: quiz.id,
           title: quiz.title,
-          description: quiz.description || '',
+          description: quiz.description || "",
           published: quiz.published,
           quiz_duration_seconds: quizDurationSeconds ?? null,
           is_code_active: isCodeActive,
@@ -172,20 +200,20 @@ const QuizEdit = () => {
         dbQuestions
       );
 
-      toast.success('Quiz saved successfully');
+      toast.success("Quiz saved successfully");
       setActivationDirty(false);
       setRumbledDirty(false);
-      navigate('/dashboard');
+      navigate("/dashboard");
     } catch (error) {
-      console.error('Error saving quiz:', error);
-      toast.error('Failed to save quiz');
+      console.error("Error saving quiz:", error);
+      toast.error("Failed to save quiz");
     } finally {
       setSaving(false);
     }
   };
 
   const handleBackClick = () => {
-    navigate('/dashboard');
+    navigate("/dashboard");
   };
 
   return (
@@ -208,14 +236,19 @@ const QuizEdit = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <h1 className="text-3xl font-bold">Edit Quiz</h1>
-                  <p className="text-muted-foreground mt-1">Make changes to your quiz</p>
+                  <p className="text-muted-foreground mt-1">
+                    Make changes to your quiz
+                  </p>
                 </div>
                 <div className="flex space-x-3">
                   <Button variant="outline" onClick={handleBackClick}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
                     Back to Dashboard
                   </Button>
-                  <Button onClick={handleSaveQuiz} disabled={saving || loadingSections}>
+                  <Button
+                    onClick={handleSaveQuiz}
+                    disabled={saving || loadingSections}
+                  >
                     {saving ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -233,7 +266,10 @@ const QuizEdit = () => {
 
               {/* Quiz Name */}
               <div className="space-y-1">
-                <label className="block text-sm font-medium text-foreground" htmlFor="quiz-name">
+                <label
+                  className="block text-sm font-medium text-foreground"
+                  htmlFor="quiz-name"
+                >
                   Quiz Name
                 </label>
                 <input
@@ -250,15 +286,22 @@ const QuizEdit = () => {
                 <div>
                   <p className="text-sm font-medium">Activation</p>
                   <p className="text-xs text-muted-foreground">
-                    Only <span className="font-medium">Active</span> quizzes can be used to start a class session.
+                    Only <span className="font-medium">Active</span> quizzes can
+                    be used to start a class session.
                     {activationDirty && (
-                      <span className="ml-1 text-amber-600">— unsaved change</span>
+                      <span className="ml-1 text-amber-600">
+                        — unsaved change
+                      </span>
                     )}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-xs ${isCodeActive ? 'text-emerald-600' : 'text-slate-500'}`}>
-                    {isCodeActive ? 'Active' : 'Inactive'}
+                  <span
+                    className={`text-xs ${
+                      isCodeActive ? "text-emerald-600" : "text-slate-500"
+                    }`}
+                  >
+                    {isCodeActive ? "Active" : "Inactive"}
                   </span>
                   <Switch
                     checked={isCodeActive}
@@ -277,16 +320,23 @@ const QuizEdit = () => {
                   <div>
                     <p className="text-sm font-medium">Randomize Questions</p>
                     <p className="text-xs text-muted-foreground">
-                      Shuffle the order of questions per student when taking this quiz.
+                      Shuffle the order of questions per student when taking
+                      this quiz.
                       {rumbledDirty && (
-                        <span className="ml-1 text-amber-600">— unsaved change</span>
+                        <span className="ml-1 text-amber-600">
+                          — unsaved change
+                        </span>
                       )}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-xs ${isRumbled ? 'text-emerald-600' : 'text-slate-500'}`}>
-                    {isRumbled ? 'On' : 'Off'}
+                  <span
+                    className={`text-xs ${
+                      isRumbled ? "text-emerald-600" : "text-slate-500"
+                    }`}
+                  >
+                    {isRumbled ? "On" : "Off"}
                   </span>
                   <Switch
                     checked={isRumbled}
@@ -302,7 +352,9 @@ const QuizEdit = () => {
               <div className="flex items-center justify-between rounded-md border bg-background px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">Add Timer</p>
-                  <p className="text-xs text-muted-foreground">Set a time limit for completing the quiz.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Set a time limit for completing the quiz.
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -311,9 +363,15 @@ const QuizEdit = () => {
                     min={0}
                     step={1}
                     // display minutes; null means no timer
-                    value={Math.max(0, Math.floor((quizDurationSeconds ?? 0) / 60))}
+                    value={Math.max(
+                      0,
+                      Math.floor((quizDurationSeconds ?? 0) / 60)
+                    )}
                     onChange={(e) => {
-                      const mins = Math.max(0, parseInt(e.target.value || '0', 10));
+                      const mins = Math.max(
+                        0,
+                        parseInt(e.target.value || "0", 10)
+                      );
                       setQuizDurationSeconds(mins > 0 ? mins * 60 : null);
                     }}
                     className="w-20 rounded-md border border-border bg-background px-2 py-1 text-right"
@@ -324,22 +382,22 @@ const QuizEdit = () => {
 
               {/* ⬇️ Class Sections editor (controlled) */}
               <ClassSectionsEditor
-                quizId={quiz?.id || id || ''}
+                quizId={quiz?.id || id || ""}
                 value={sectionCodes}
                 onValueChange={setSectionCodes}
                 showSaveButton={false}
               />
 
-             <TabPreviewContent
-              quizTitle={quiz.title}
-              onBack={handleBackClick}
-              onPublish={handleSaveQuiz}
-              isPublishing={saving}
-              onQuestionsUpdated={handleQuestionsUpdated}
-              initialQuestions={questions}
-              hideHeaderActions
-              hideSetupControls   // NEW: hides the bottom “Add Timer” + “Randomize” block
-            />
+              <TabPreviewContent
+                quizTitle={quiz.title}
+                onBack={handleBackClick}
+                onPublish={handleSaveQuiz}
+                isPublishing={saving}
+                onQuestionsUpdated={handleQuestionsUpdated}
+                initialQuestions={questions}
+                hideHeaderActions
+                hideSetupControls // NEW: hides the bottom “Add Timer” + “Randomize” block
+              />
             </div>
           ) : (
             <div className="text-center py-16">

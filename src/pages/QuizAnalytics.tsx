@@ -1,11 +1,11 @@
-import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
-import { getSocket } from '@/lib/socket';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/theme/ThemeToggle';
-import { toast } from 'sonner';
+import { useEffect, useState, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { getSocket } from "@/lib/socket";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { toast } from "sonner";
 
 type MCQOption =
   | { id: string; text: string }
@@ -20,69 +20,77 @@ interface StudentState {
 }
 
 const normalizeString = (s: any) =>
-  String(s ?? '')
-    .toLowerCase()
-    .trim();
+  String(s ?? "").toLowerCase().trim();
 
 const wordSet = (s: string) =>
   new Set(
     s
       .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
       .filter(Boolean)
   );
 
-const QuizAnalytics = () => {
+// --- New discriminated union for answer meta (includes identification)
+type AnswerMeta =
+  | {
+      type: "multiple_choice";
+      correctTokens: Set<string>;
+    }
+  | {
+      type: "true_false";
+      correctTokens: Set<string>;
+    }
+  | {
+      type: "essay";
+      essayAnswer?: string;
+    }
+  | {
+      type: "identification";
+      identificationAnswer?: string;
+    };
 
+const QuizAnalytics = () => {
   // top
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-    const [isSocketLive, setIsSocketLive] = useState(true);
-    useEffect(() => {
-      const on = () => setIsOnline(true);
-      const off = () => setIsOnline(false);
-      window.addEventListener("online", on);
-      window.addEventListener("offline", off);
-      return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-    }, []);
+  const [isSocketLive, setIsSocketLive] = useState(true);
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
 
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [quizTitle, setQuizTitle] = useState('');
+  const [quizTitle, setQuizTitle] = useState("");
   const [students, setStudents] = useState<Record<string, StudentState>>({});
   const [totalQuestions, setTotalQuestions] = useState(0);
-  const [quizCode, setQuizCode] = useState('');
+  const [quizCode, setQuizCode] = useState("");
   const socketRef = useRef<any>(null);
 
-  // Map question_id -> normalized meta used for correctness checks
-  const correctAnswersRef = useRef<
-    Record<
-      string,
-      {
-        type: 'multiple_choice' | 'true_false' | 'essay';
-        // a set of acceptable “correct” tokens for MCQ/TF
-        correctTokens?: Set<string>;
-        // normalized canonical essay string
-        essayAnswer?: string;
-      }
-    >
-  >({});
+  // Map question_id (string) -> normalized meta used for correctness checks
+  const correctAnswersRef = useRef<Record<string, AnswerMeta>>({});
 
   useEffect(() => {
-  const socket = getSocket();
-  socketRef.current = socket;
+    const socket = getSocket();
+    socketRef.current = socket;
 
-  const onDisconnect = () => setIsSocketLive(false);
-  const onConnect = () => setIsSocketLive(true);
+    const onDisconnect = () => setIsSocketLive(false);
+    const onConnect = () => setIsSocketLive(true);
 
-  socket.on("connect", onConnect);
-  socket.on("disconnect", onDisconnect);
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
 
-  return () => {
-    socket.off("connect", onConnect);
-    socket.off("disconnect", onDisconnect);
-  };
-}, []);
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -90,61 +98,63 @@ const QuizAnalytics = () => {
 
       // quiz meta
       const { data: quiz, error: quizErr } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('id', id)
+        .from("quizzes")
+        .select("*")
+        .eq("id", id)
         .single();
       if (quizErr || !quiz) return;
       setQuizTitle(quiz.title);
-      setQuizCode(quiz.invitation_code || '');
+      setQuizCode(quiz.invitation_code || "");
 
       // questions + correctness map
       const { data: questions, error: qErr } = await supabase
-        .from('quiz_questions')
-        .select('*')
-        .eq('quiz_id', id);
+        .from("quiz_questions")
+        .select("*")
+        .eq("quiz_id", id);
       if (qErr || !questions) return;
       setTotalQuestions(questions.length);
 
-      const map: typeof correctAnswersRef.current = {};
+      const map: Record<string, AnswerMeta> = {};
       for (const q of questions) {
-        const type = String(q.type || '').toLowerCase();
+        // ensure we use string keys
+        const qid = String((q as any).id ?? "");
 
-        if (type === 'multiple_choice' || type === 'mcq') {
+        const type = String((q as any).type || "").toLowerCase();
+
+        if (type === "multiple_choice" || type === "mcq") {
           // Build a set of acceptable tokens for the correct option.
-          // Accept any of:
-          //  - the option id ('a','b',…)
-          //  - the option index ("0","1",…)
-          //  - the option text (lowercased)
-          //  - the raw correct_answer value if it’s already an id/index/text
-          const options: unknown[] = Array.isArray(q.options) ? (q.options as unknown[]) : [];
+          const options: unknown[] = Array.isArray((q as any).options)
+            ? ((q as any).options as unknown[])
+            : [];
           const tokens = new Set<string>();
 
           const optAtIndex = (idx: number) => {
             const raw = options[idx];
-            if (raw == null) return { id: '', text: '' };
-            if (typeof raw === 'string') return { id: String.fromCharCode(97 + idx), text: raw };
-            const id = (raw as any).id ?? (raw as any).value ?? String.fromCharCode(97 + idx);
-            const text = (raw as any).text ?? (raw as any).label ?? '';
+            if (raw == null) return { id: "", text: "" };
+            if (typeof raw === "string")
+              return { id: String.fromCharCode(97 + idx), text: raw };
+            const id =
+              (raw as any).id ?? (raw as any).value ?? String.fromCharCode(97 + idx);
+            const text = (raw as any).text ?? (raw as any).label ?? "";
             return { id: String(id), text: String(text) };
           };
 
           // normalize correct_answer from DB
-          const ca = q.correct_answer;
+          const ca = (q as any).correct_answer;
           let correctIndex: number | null = null;
-          let correctId = '';
-          let correctText = '';
+          let correctId = "";
+          let correctText = "";
 
           // If correct_answer is like 'a'/'b'
-          if (typeof ca === 'string' && ca.length === 1 && /[a-z]/i.test(ca)) {
+          if (typeof ca === "string" && ca.length === 1 && /[a-z]/i.test(ca)) {
             correctIndex = ca.toLowerCase().charCodeAt(0) - 97;
           }
           // If it’s a number or numeric string – treat as index
-          else if (typeof ca === 'number' || (typeof ca === 'string' && /^\d+$/.test(ca))) {
+          else if (typeof ca === "number" || (typeof ca === "string" && /^\d+$/.test(ca))) {
             correctIndex = Number(ca);
           }
           // Otherwise, try to match by text or id against options
-          else if (typeof ca === 'string') {
+          else if (typeof ca === "string") {
             const nCA = normalizeString(ca);
             const byTextIdx = options.findIndex((o, i) => {
               const { id, text } = optAtIndex(i);
@@ -160,7 +170,7 @@ const QuizAnalytics = () => {
           }
 
           // If we didn’t resolve via index, also try to see if ca is already an option id/text
-          if (!correctId && typeof ca === 'string') {
+          if (!correctId && typeof ca === "string") {
             correctId = normalizeString(ca);
           }
 
@@ -169,30 +179,47 @@ const QuizAnalytics = () => {
           if (correctIndex != null && correctIndex >= 0) tokens.add(String(correctIndex));
           if (correctText) tokens.add(normalizeString(correctText));
 
-          map[q.id] = { type: 'multiple_choice', correctTokens: tokens };
-        } else if (type === 'true_false' || type === 'true-false' || type === 'truefalse') {
+          map[qid] = { type: "multiple_choice", correctTokens: tokens };
+        } else if (
+          type === "true_false" ||
+          type === "true-false" ||
+          type === "truefalse"
+        ) {
           // Accept: true/false, 'a'/'b', 't'/'f', '1'/'0', 'yes'/'no'
           const tokens = new Set<string>();
-          const ca = q.correct_answer;
+          const ca = (q as any).correct_answer;
           const truth =
-            typeof ca === 'boolean'
+            typeof ca === "boolean"
               ? ca
-              : normalizeString(ca) === 'true' ||
-                normalizeString(ca) === 't' ||
-                normalizeString(ca) === '1' ||
-                normalizeString(ca) === 'yes' ||
-                normalizeString(ca) === 'a';
+              : normalizeString(ca) === "true" ||
+                normalizeString(ca) === "t" ||
+                normalizeString(ca) === "1" ||
+                normalizeString(ca) === "yes" ||
+                normalizeString(ca) === "a";
 
           if (truth) {
-            ['true', 't', '1', 'yes', 'a'].forEach((t) => tokens.add(t));
+            ["true", "t", "1", "yes", "a"].forEach((t) => tokens.add(t));
           } else {
-            ['false', 'f', '0', 'no', 'b'].forEach((t) => tokens.add(t));
+            ["false", "f", "0", "no", "b"].forEach((t) => tokens.add(t));
           }
 
-          map[q.id] = { type: 'true_false', correctTokens: tokens };
+          map[qid] = { type: "true_false", correctTokens: tokens };
+        } else if (type === "identification") {
+          // Identification: exact normalized match
+          // Accept non-string correct_answer (e.g., numbers) by coercing to string.
+          const normalizeId = (s: unknown) =>
+            String(s ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+          map[qid] = {
+            type: "identification",
+            identificationAnswer: normalizeId((q as any).correct_answer),
+          };
         } else {
           // essay / short answer
-          map[q.id] = { type: 'essay', essayAnswer: normalizeString(q.correct_answer ?? '') };
+          map[qid] = {
+            type: "essay",
+            essayAnswer: normalizeString((q as any).correct_answer ?? ""),
+          };
         }
       }
       correctAnswersRef.current = map;
@@ -207,7 +234,9 @@ const QuizAnalytics = () => {
 
     // seed students on open/join (no scoring here)
     const seed = (payload: any) => {
-      const names: string[] = Array.isArray(payload?.participants) ? payload.participants : [];
+      const names: string[] = Array.isArray(payload?.participants)
+        ? payload.participants
+        : [];
       setStudents((prev) => {
         const next = { ...prev };
         names.forEach((n) => {
@@ -217,28 +246,38 @@ const QuizAnalytics = () => {
       });
     };
 
-    socket.on('server:quiz-opened', seed);
-    socket.on('server:student-joined', seed);
+    socket.on("server:quiz-opened", seed);
+    socket.on("server:student-joined", seed);
 
     // scoring
-    socket.on('server:answer-received', (data: any) => {
+    socket.on("server:answer-received", (data: any) => {
       const { name, question_id, answer } = data || {};
-      if (!name || !question_id) return;
+      if (!name || question_id == null) return;
 
-      const meta = correctAnswersRef.current[question_id];
+      const qid = String(question_id);
+      const meta = correctAnswersRef.current[qid];
       if (!meta) return;
 
       let isCorrect = false;
 
-      if (meta.type === 'multiple_choice' || meta.type === 'true_false') {
+      if (meta.type === "multiple_choice" || meta.type === "true_false") {
         const token = normalizeString(answer);
         if (meta.correctTokens?.has(token)) {
           isCorrect = true;
         }
+      } else if (meta.type === "identification") {
+        // same normalization used when building the map
+        const normalizeId = (s: unknown) =>
+          String(s ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+        const stuNorm = normalizeId(answer);
+        if (meta.identificationAnswer && stuNorm === meta.identificationAnswer) {
+          isCorrect = true;
+        }
       } else {
         // essay: ≥2 shared keywords OR ≥50% of distinct keywords match
-        const stu = wordSet(String(answer ?? ''));
-        const key = wordSet(String(meta.essayAnswer ?? ''));
+        const stu = wordSet(String(answer ?? ""));
+        const key = wordSet(String(meta.essayAnswer ?? ""));
         let m = 0;
         key.forEach((w) => {
           if (stu.has(w)) m++;
@@ -250,8 +289,13 @@ const QuizAnalytics = () => {
 
       setStudents((prev) => {
         const next = { ...prev };
-        const s = next[name] || { name, answersMap: {}, answered: 0, correct: 0 };
-        s.answersMap[question_id] = isCorrect;
+        const s = next[name] || {
+          name,
+          answersMap: {},
+          answered: 0,
+          correct: 0,
+        };
+        s.answersMap[qid] = isCorrect;
         s.answered = Object.keys(s.answersMap).length;
         s.correct = Object.values(s.answersMap).filter(Boolean).length;
         next[name] = { ...s };
@@ -259,26 +303,26 @@ const QuizAnalytics = () => {
       });
     });
 
-    socket.on('server:client-left', seed);
+    socket.on("server:client-left", seed);
 
-    socket.on('server:quiz-end', () => {
-      toast.success('Quiz ended');
+    socket.on("server:quiz-end", () => {
+      toast.success("Quiz ended");
       navigate(`/quiz/results/${id}`);
     });
 
     return () => {
-      socket.off('server:quiz-opened', seed);
-      socket.off('server:student-joined', seed);
-      socket.off('server:answer-received');
-      socket.off('server:client-left', seed);
-      socket.off('server:quiz-end');
+      socket.off("server:quiz-opened", seed);
+      socket.off("server:student-joined", seed);
+      socket.off("server:answer-received");
+      socket.off("server:client-left", seed);
+      socket.off("server:quiz-end");
     };
   }, [id, navigate]);
 
   const handleEndQuiz = () => {
     if (!quizCode) return;
     const socket = socketRef.current || getSocket();
-    socket.emit('host_end', { room: quizCode });
+    socket.emit("host_end", { room: quizCode });
   };
 
   // sort by correct desc, then by answered desc, then name asc
@@ -286,7 +330,7 @@ const QuizAnalytics = () => {
     if (b.correct !== a.correct) return b.correct - a.correct;
     if (b.answered !== a.answered) return b.answered - a.answered;
     return a.name.localeCompare(b.name);
-    });
+  });
 
   return (
     <div className="min-h-screen bg-muted/20 p-4">
@@ -294,15 +338,20 @@ const QuizAnalytics = () => {
         {/* Offline/socket banner INSIDE the render */}
         {(!isOnline || !isSocketLive) && (
           <div className="mb-4 rounded-md bg-amber-100 text-amber-900 px-4 py-2 border border-amber-300">
-            Live updates paused ({!isOnline ? "offline" : "socket disconnected"}). Using backup polling…
+            Live updates paused ({!isOnline ? "offline" : "socket disconnected"}
+            ). Using backup polling…
           </div>
         )}
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold">Live Quiz Results</h1>
             <p className="text-muted-foreground">{quizTitle}</p>
-            <p className="text-muted-foreground mt-1">Students Finished: {sorted.length}</p>
-            <p className="text-muted-foreground mt-1">Total Questions: {totalQuestions}</p>
+            <p className="text-muted-foreground mt-1">
+              Students Finished: {sorted.length}
+            </p>
+            <p className="text-muted-foreground mt-1">
+              Total Questions: {totalQuestions}
+            </p>
           </div>
           <div className="flex items-center space-x-2">
             <ThemeToggle />
@@ -323,8 +372,10 @@ const QuizAnalytics = () => {
               </thead>
               <tbody>
                 {sorted.map((stu, idx) => {
-                  const progress = totalQuestions > 0 ? (stu.answered / totalQuestions) * 100 : 0;
-                  const correctPct = totalQuestions > 0 ? (stu.correct / totalQuestions) * 100 : 0;
+                  const progress =
+                    totalQuestions > 0 ? (stu.answered / totalQuestions) * 100 : 0;
+                  const correctPct =
+                    totalQuestions > 0 ? (stu.correct / totalQuestions) * 100 : 0;
                   return (
                     <tr key={stu.name} className="border-b">
                       <td className="px-4 py-2">{idx + 1}</td>
@@ -350,7 +401,9 @@ const QuizAnalytics = () => {
                             <div className="h-3 relative w-full rounded-md bg-muted/50">
                               <div
                                 className="absolute top-0 left-0 h-full rounded-md bg-emerald-500 dark:bg-emerald-600"
-                                style={{ width: `${Math.max(0, Math.min(100, correctPct))}%` }}
+                                style={{
+                                  width: `${Math.max(0, Math.min(100, correctPct))}%`,
+                                }}
                               />
                             </div>
                           </div>
@@ -364,7 +417,10 @@ const QuizAnalytics = () => {
                 })}
                 {sorted.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-4 text-center text-muted-foreground">
+                    <td
+                      colSpan={4}
+                      className="px-4 py-4 text-center text-muted-foreground"
+                    >
                       Waiting for students to finish...
                     </td>
                   </tr>

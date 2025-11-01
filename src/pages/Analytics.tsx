@@ -26,6 +26,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Check, ChevronsUpDown } from "lucide-react";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "cmdk";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 
 type Section = { id: string; code: string };
 
@@ -34,7 +50,7 @@ const Analytics = () => {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("overview");
   const hideSectionFilter =
-    activeTab === "insights" || activeTab === "recommendations";
+    activeTab === "insights";
 
   const [hasQuizzes, setHasQuizzes] = useState(true);
   const [hasAnalyticsData, setHasAnalyticsData] = useState(true);
@@ -43,9 +59,19 @@ const Analytics = () => {
 
   const [professorId, setProfessorId] = useState<string | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
-  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(
-    null
-  );
+  const [selectedSectionIds, setSelectedSectionIds] = useState<string[]>([]);
+  const [sectionSelectOpen, setSectionSelectOpen] = useState(false);
+
+  // build label for the button: list up to 3 selected codes, else show "A, B, C +N"
+  const selectedSectionLabel = (() => {
+    if (!selectedSectionIds || selectedSectionIds.length === 0)
+      return "All Sections";
+    const labels = selectedSectionIds.map(
+      (id) => sections.find((s) => s.id === id)?.code ?? id
+    );
+    if (labels.length <= 3) return labels.join(", ");
+    return `${labels.slice(0, 3).join(", ")} +${labels.length - 3}`;
+  })();
 
   const { toast } = useToast();
 
@@ -225,24 +251,96 @@ const Analytics = () => {
             <div className="flex items-center gap-2">
               {/* Section filter controlling all analytics on this page */}
               {!hideSectionFilter && (
-                <Select
-                  value={selectedSectionId ?? "ALL"}
-                  onValueChange={(v) =>
-                    setSelectedSectionId(v === "ALL" ? null : v)
-                  }
+                <Popover
+                  open={sectionSelectOpen}
+                  onOpenChange={setSectionSelectOpen}
                 >
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="All Sections" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">All Sections</SelectItem>
-                    {sections.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.code}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={sectionSelectOpen}
+                      className="w-[320px] justify-between gap-2"
+                    >
+                      <div className="truncate text-left">
+                        {selectedSectionLabel}
+                      </div>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+
+                  <PopoverContent className="w-[320px] p-0">
+                    <Command>
+                      <div className="p-2">
+                        <CommandInput
+                          placeholder="Search sections..."
+                          className="w-full border rounded px-2 py-1"
+                        />
+                      </div>
+
+                      <CommandList>
+                        <CommandGroup className="max-h-64 overflow-auto">
+                          <CommandItem
+                            value="__select_all__"
+                            onSelect={(val: string) => {
+                              if (
+                                selectedSectionIds.length === sections.length
+                              ) {
+                                setSelectedSectionIds([]);
+                              } else {
+                                setSelectedSectionIds(
+                                  Array.isArray(sections)
+                                    ? sections.map((s) => s.id)
+                                    : []
+                                );
+                              }
+                            }}
+                          >
+                            <div className="flex items-center gap-2 w-full">
+                              <Check
+                                className={cn(
+                                  "h-4 w-4",
+                                  selectedSectionIds.length === sections.length
+                                    ? "opacity-100"
+                                    : "opacity-0"
+                                )}
+                              />
+                              <span className="font-medium">Select All</span>
+                            </div>
+                          </CommandItem>
+
+                          {Array.isArray(sections) &&
+                            sections.map((section) => (
+                              <CommandItem
+                                key={section.id}
+                                value={section.id}
+                                onSelect={(val: string) => {
+                                  const sid = String(val);
+                                  setSelectedSectionIds((prev) =>
+                                    prev.includes(sid)
+                                      ? prev.filter((id) => id !== sid)
+                                      : [...prev, sid]
+                                  );
+                                }}
+                              >
+                                <div className="flex items-center gap-2 w-full">
+                                  <Check
+                                    className={cn(
+                                      "h-4 w-4",
+                                      selectedSectionIds.includes(section.id)
+                                        ? "opacity-100"
+                                        : "opacity-0"
+                                    )}
+                                  />
+                                  <span className="flex-1">{section.code}</span>
+                                </div>
+                              </CommandItem>
+                            ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               )}
 
               {hasQuizzes && !hasAnalyticsData && (
@@ -285,13 +383,13 @@ const Analytics = () => {
                 <Users className="h-4 w-4 mr-2" />
                 Students
               </TabsTrigger>
-              <TabsTrigger value="insights">
-                <Lightbulb className="h-4 w-4 mr-2" />
-                Insights
-              </TabsTrigger>
               <TabsTrigger value="recommendations">
                 <Sparkle className="h-4 w-4 mr-2" />
                 Recommendations
+              </TabsTrigger>
+              <TabsTrigger value="insights">
+                <Lightbulb className="h-4 w-4 mr-2" />
+                Insights
               </TabsTrigger>
             </TabsList>
 
@@ -299,14 +397,17 @@ const Analytics = () => {
               <PerformanceOverview
                 hasAnalyticsData={hasAnalyticsData}
                 professorId={professorId}
-                sectionId={selectedSectionId}
+                sectionId={
+                  selectedSectionIds.length === 1 ? selectedSectionIds[0] : null
+                }
               />
             </TabsContent>
 
             <TabsContent value="students" className="space-y-6">
-              {/* Pass the selected section into the clustering chart */}
               <StudentProgressChart
-                selectedSection={selectedSectionId ?? "all"}
+                selectedSection={
+                  selectedSectionIds.length > 0 ? selectedSectionIds : null
+                }
               />
             </TabsContent>
 
@@ -316,8 +417,11 @@ const Analytics = () => {
             </TabsContent>
 
             <TabsContent value="recommendations" className="space-y-6">
-              {/* Keep using your Recommendations component; it can render recs */}
-              <PredictiveModeling />
+              <PredictiveModeling
+                selectedSectionIds={
+                  selectedSectionIds.length > 0 ? selectedSectionIds : null
+                }
+              />
             </TabsContent>
           </Tabs>
         </div>

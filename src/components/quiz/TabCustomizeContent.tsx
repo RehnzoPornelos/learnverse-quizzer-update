@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
-import { Switch } from '@/components/ui/switch';
-import { Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 interface TabCustomizeContentProps {
   file: File | null;
@@ -16,101 +16,136 @@ interface TabCustomizeContentProps {
 
 const MAX_QUESTIONS = 25;
 
-const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) => {
+const TabCustomizeContent = ({
+  file,
+  onQuizReady,
+}: TabCustomizeContentProps) => {
   const [mcqCount, setMcqCount] = useState(5);
   const [tfCount, setTfCount] = useState(5);
   const [saCount, setSaCount] = useState(5);
+  const [idfCount, setIdfCount] = useState(5);
+  const [essCount, setEssCount] = useState(5);
   const [isGenerating, setIsGenerating] = useState(false);
 
   // timer
   const [timeLimitEnabled, setTimeLimitEnabled] = useState(false);
-  const [timeLimitMinutesStr, setTimeLimitMinutesStr] = useState<string>('');
+  const [timeLimitMinutesStr, setTimeLimitMinutesStr] = useState<string>("");
 
   // randomize
   const [randomizeQuestions, setRandomizeQuestions] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('randomize_questions');
-      if (stored === 'false') return false;
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("randomize_questions");
+      if (stored === "false") return false;
     }
     return true;
   });
 
-  const totalCount = (mcqCount || 0) + (tfCount || 0) + (saCount || 0);
+  const [difficulty, setDifficulty] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("quiz_difficulty");
+      return stored || "Intermediate";
+    }
+    return "Intermediate";
+  });
+
+  const totalCount =
+    (mcqCount || 0) +
+    (tfCount || 0) +
+    (saCount || 0) +
+    (idfCount || 0) +
+    (essCount || 0);
   const overLimit = totalCount > MAX_QUESTIONS;
 
   // Persist randomize
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('randomize_questions', randomizeQuestions ? 'true' : 'false');
+    if (typeof window !== "undefined") {
+      localStorage.setItem(
+        "randomize_questions",
+        randomizeQuestions ? "true" : "false"
+      );
     }
   }, [randomizeQuestions]);
 
   // Persist timer (effect)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const minutes = Math.max(0, parseInt(timeLimitMinutesStr || '0', 10) || 0);
+    if (typeof window === "undefined") return;
+    const minutes = Math.max(0, parseInt(timeLimitMinutesStr || "0", 10) || 0);
     if (timeLimitEnabled && minutes > 0) {
-      localStorage.setItem('quiz_timer_enabled', 'true');
-      localStorage.setItem('quiz_duration_seconds', String(minutes * 60));
+      localStorage.setItem("quiz_timer_enabled", "true");
+      localStorage.setItem("quiz_duration_seconds", String(minutes * 60));
     } else {
-      localStorage.setItem('quiz_timer_enabled', 'false');
-      localStorage.removeItem('quiz_duration_seconds');
+      localStorage.setItem("quiz_timer_enabled", "false");
+      localStorage.removeItem("quiz_duration_seconds");
     }
   }, [timeLimitEnabled, timeLimitMinutesStr]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("quiz_difficulty", difficulty);
+    }
+  }, [difficulty]);
+
   const handleGenerateQuiz = async () => {
     if (!file) {
-      toast.error('No file uploaded.');
+      toast.error("No file uploaded.");
       return;
     }
 
     // Enforce overall question cap
     if (overLimit) {
-      toast.error(`Too many questions. Maximum allowed is ${MAX_QUESTIONS}. Your total is ${totalCount}.`);
+      toast.error(
+        `Too many questions. Maximum allowed is ${MAX_QUESTIONS}. Your total is ${totalCount}.`
+      );
       return;
     }
     if (totalCount <= 0) {
-      toast.error('Please set at least 1 question.');
+      toast.error("Please set at least 1 question.");
       return;
     }
 
     // Validate timer
-    const minutes = parseInt(timeLimitMinutesStr || '0', 10) || 0;
+    const minutes = parseInt(timeLimitMinutesStr || "0", 10) || 0;
     if (timeLimitEnabled && minutes <= 0) {
-      toast.error('Please enter a positive duration in minutes or turn off “Add Timer”.');
+      toast.error(
+        "Please enter a positive duration in minutes or turn off “Add Timer”."
+      );
       return;
     }
 
     // Explicitly flush timer state to localStorage right before leaving this page
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       if (timeLimitEnabled && minutes > 0) {
-        localStorage.setItem('quiz_timer_enabled', 'true');
-        localStorage.setItem('quiz_duration_seconds', String(minutes * 60));
+        localStorage.setItem("quiz_timer_enabled", "true");
+        localStorage.setItem("quiz_duration_seconds", String(minutes * 60));
       } else {
-        localStorage.setItem('quiz_timer_enabled', 'false');
-        localStorage.removeItem('quiz_duration_seconds');
+        localStorage.setItem("quiz_timer_enabled", "false");
+        localStorage.removeItem("quiz_duration_seconds");
       }
     }
 
     setIsGenerating(true);
     const formData = new FormData();
-    formData.append('file', file);
-    formData.append('mcq_count', String(mcqCount || 0));
-    formData.append('sa_count', String(saCount || 0));
-    formData.append('tf_count', String(tfCount || 0));
+    formData.append("file", file);
+    formData.append("mcq_count", String(mcqCount || 0));
+    formData.append("sa_count", String(saCount || 0));
+    formData.append("tf_count", String(tfCount || 0));
+    formData.append("idf_count", String(idfCount || 0));
+    formData.append("ess_count", String(essCount || 0));
+    formData.append("difficulty", difficulty);
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const backendUrl =
+        import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
       const response = await fetch(`${backendUrl}/generate-quiz/`, {
-        method: 'POST',
+        method: "POST",
         body: formData,
       });
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to generate quiz.');
+        throw new Error(errorData.error || "Failed to generate quiz.");
       }
       const quizData = await response.json();
-      toast.success('Quiz generated successfully!');
+      toast.success("Quiz generated successfully!");
       onQuizReady(quizData);
     } catch (err: any) {
       toast.error(`Error: ${err.message}`);
@@ -127,20 +162,27 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
 
   return (
     <div className="grid grid-cols-1 gap-6">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-xl font-semibold">Customize Quiz Settings</h2>
+                  <h2 className="text-xl font-semibold">
+                    Customize Quiz Settings
+                  </h2>
                   <p className="text-muted-foreground text-sm mt-1">
-                    Set the number of questions by type. We'll generate the quiz based on your preferences.
+                    Set the number of questions by type. We'll generate the quiz
+                    based on your preferences.
                   </p>
                 </div>
                 <div
                   className={`text-sm font-medium ${
-                    overLimit ? 'text-red-600' : 'text-muted-foreground'
+                    overLimit ? "text-red-600" : "text-muted-foreground"
                   }`}
                   aria-live="polite"
                 >
@@ -183,10 +225,33 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
                       className="ui-input mt-1"
                     />
                   </div>
+                  <div>
+                    <Label htmlFor="idf">Identification</Label>
+                    <Input
+                      id="idf"
+                      type="number"
+                      value={idfCount}
+                      onChange={(e) => setIdfCount(parseCount(e.target.value))}
+                      min={0}
+                      className="ui-input mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ess">Essay</Label>
+                    <Input
+                      id="ess"
+                      type="number"
+                      value={essCount}
+                      onChange={(e) => setEssCount(parseCount(e.target.value))}
+                      min={0}
+                      className="ui-input mt-1"
+                    />
+                  </div>
 
                   {overLimit && (
                     <p className="text-xs text-red-600">
-                      You’ve selected {totalCount} questions — the maximum is {MAX_QUESTIONS}. Reduce the counts to proceed.
+                      You’ve selected {totalCount} questions — the maximum is{" "}
+                      {MAX_QUESTIONS}. Reduce the counts to proceed.
                     </p>
                   )}
                 </div>
@@ -198,16 +263,27 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
                       {/* Timer */}
                       <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
-                          <Label htmlFor="time-limit" className="text-sm cursor-pointer">Add Timer</Label>
-                          <p className="text-muted-foreground text-xs">Specify a time limit for completing the quiz</p>
+                          <Label
+                            htmlFor="time-limit"
+                            className="text-sm cursor-pointer"
+                          >
+                            Add Timer
+                          </Label>
+                          <p className="text-muted-foreground text-xs">
+                            Specify a time limit for completing the quiz
+                          </p>
                         </div>
                         <Switch
                           id="time-limit"
                           checked={timeLimitEnabled}
                           onCheckedChange={(val: boolean) => {
                             setTimeLimitEnabled(val);
-                            if (val && (timeLimitMinutesStr === '0' || timeLimitMinutesStr === '')) {
-                              setTimeLimitMinutesStr('');
+                            if (
+                              val &&
+                              (timeLimitMinutesStr === "0" ||
+                                timeLimitMinutesStr === "")
+                            ) {
+                              setTimeLimitMinutesStr("");
                             }
                           }}
                         />
@@ -215,7 +291,9 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
 
                       {timeLimitEnabled && (
                         <div className="mt-3">
-                          <Label htmlFor="time-minutes" className="text-sm">Duration (minutes)</Label>
+                          <Label htmlFor="time-minutes" className="text-sm">
+                            Duration (minutes)
+                          </Label>
                           <Input
                             id="time-minutes"
                             type="text"
@@ -223,11 +301,15 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
                             pattern="[0-9]*"
                             value={timeLimitMinutesStr}
                             onChange={(e) => {
-                              const cleaned = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+                              const cleaned = e.target.value
+                                .replace(/[^0-9]/g, "")
+                                .replace(/^0+(?=\d)/, "");
                               setTimeLimitMinutesStr(cleaned);
                             }}
                             onBlur={() => {
-                              const cleaned = (timeLimitMinutesStr || '').replace(/^0+(?=\d)/, '');
+                              const cleaned = (
+                                timeLimitMinutesStr || ""
+                              ).replace(/^0+(?=\d)/, "");
                               setTimeLimitMinutesStr(cleaned);
                             }}
                             className="ui-input mt-1 w-36"
@@ -237,18 +319,61 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
                       )}
 
                       <Separator />
-
                       {/* Randomize */}
                       <div className="flex items-start justify-between">
                         <div className="space-y-0.5">
-                          <Label htmlFor="randomize" className="text-sm cursor-pointer">Randomize Questions</Label>
-                          <p className="text-muted-foreground text-xs">Preference only — preview order stays the same</p>
+                          <Label
+                            htmlFor="randomize"
+                            className="text-sm cursor-pointer"
+                          >
+                            Randomize Questions
+                          </Label>
+                          <p className="text-muted-foreground text-xs">
+                            Preference only — preview order stays the same
+                          </p>
                         </div>
                         <Switch
                           id="randomize"
                           checked={randomizeQuestions}
-                          onCheckedChange={(val: boolean) => setRandomizeQuestions(val)}
+                          onCheckedChange={(val: boolean) =>
+                            setRandomizeQuestions(val)
+                          }
                         />
+                      </div>
+
+                      <Separator />
+
+                      {/* Difficulty */}
+                      <div className="space-y-2">
+                        <Label className="text-sm">Difficulty Level</Label>
+                        <div className="space-y-2">
+                          {["Easy", "Intermediate", "Difficult"].map(
+                            (level) => (
+                              <div
+                                key={level}
+                                className="flex items-center space-x-2"
+                              >
+                                <input
+                                  type="radio"
+                                  id={`difficulty-${level.toLowerCase()}`}
+                                  name="difficulty"
+                                  value={level}
+                                  checked={difficulty === level}
+                                  onChange={(e) =>
+                                    setDifficulty(e.target.value)
+                                  }
+                                  className="w-4 h-4 cursor-pointer"
+                                />
+                                <Label
+                                  htmlFor={`difficulty-${level.toLowerCase()}`}
+                                  className="text-sm cursor-pointer font-normal"
+                                >
+                                  {level}
+                                </Label>
+                              </div>
+                            )
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -258,14 +383,18 @@ const TabCustomizeContent = ({ file, onQuizReady }: TabCustomizeContentProps) =>
               <Separator />
 
               <div className="pt-2">
-                <Button onClick={handleGenerateQuiz} className="w-full" disabled={isGenerating}>
+                <Button
+                  onClick={handleGenerateQuiz}
+                  className="w-full"
+                  disabled={isGenerating}
+                >
                   {isGenerating ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Generating Quiz...
                     </>
                   ) : (
-                    'Generate Quiz'
+                    "Generate Quiz"
                   )}
                 </Button>
               </div>
