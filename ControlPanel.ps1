@@ -232,16 +232,11 @@ function Stop-AllServers {
     # Kill all related processes more aggressively
     $processesKilled = 0
     
-    # 1. Stop tracked processes and their children
+    # 1. Use taskkill for more forceful termination (kills process trees)
     if ($script:backendProcess -and -not $script:backendProcess.HasExited) {
         try {
-            # Get all child processes
-            $children = Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $script:backendProcess.Id }
-            foreach ($child in $children) {
-                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-                $processesKilled++
-            }
-            Stop-Process -Id $script:backendProcess.Id -Force -ErrorAction SilentlyContinue
+            # Use taskkill with /F (force) and /T (tree) flags
+            Start-Process "taskkill" -ArgumentList "/F", "/T", "/PID", $script:backendProcess.Id -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
             $processesKilled++
             $backendStatusLabel.Text = "Status: Stopped"
             $backendStatusLabel.ForeColor = [System.Drawing.Color]::Red
@@ -252,13 +247,8 @@ function Stop-AllServers {
     
     if ($script:frontendProcess -and -not $script:frontendProcess.HasExited) {
         try {
-            # Get all child processes
-            $children = Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $script:frontendProcess.Id }
-            foreach ($child in $children) {
-                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-                $processesKilled++
-            }
-            Stop-Process -Id $script:frontendProcess.Id -Force -ErrorAction SilentlyContinue
+            # Use taskkill with /F (force) and /T (tree) flags
+            Start-Process "taskkill" -ArgumentList "/F", "/T", "/PID", $script:frontendProcess.Id -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
             $processesKilled++
             $frontendStatusLabel.Text = "Status: Stopped"
             $frontendStatusLabel.ForeColor = [System.Drawing.Color]::Red
@@ -275,36 +265,51 @@ function Stop-AllServers {
         # Find and kill processes using port 8000 (backend)
         $backend8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
         foreach ($pid in $backend8000) {
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            Start-Process "taskkill" -ArgumentList "/F", "/PID", $pid -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
             $processesKilled++
         }
         
         # Find and kill processes using port 8080 (frontend)
         $frontend8080 = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
         foreach ($pid in $frontend8080) {
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            Start-Process "taskkill" -ArgumentList "/F", "/PID", $pid -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
             $processesKilled++
         }
     } catch {}
     
-    # 3. Kill any remaining python/node processes running our servers
+    # 3. Kill any remaining python/node processes running our servers (more aggressive)
+    try {
+        # Kill all python processes with uvicorn
+        Start-Process "taskkill" -ArgumentList "/F", "/IM", "python.exe", "/FI", "WINDOWTITLE eq *uvicorn*" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        
+        # Kill all node processes with vite
+        Start-Process "taskkill" -ArgumentList "/F", "/IM", "node.exe", "/FI", "WINDOWTITLE eq *vite*" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+    } catch {}
+    
+    # 4. Additional safety: kill by command line pattern
     try {
         Get-Process | Where-Object {$_.ProcessName -eq "python" -or $_.ProcessName -eq "node"} | ForEach-Object {
             try {
                 $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
                 if ($cmdLine -like "*uvicorn*socket_app*" -or $cmdLine -like "*vite*" -or $cmdLine -like "*:8000*" -or $cmdLine -like "*:8080*") {
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    Start-Process "taskkill" -ArgumentList "/F", "/PID", $_.Id -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
                     $processesKilled++
                 }
             } catch {}
         }
     } catch {}
     
-    # 4. Wait for file handles to be released
+    # 5. Wait longer for file handles to be released
     if ($processesKilled -gt 0) {
         Update-StatusBar "Stopped $processesKilled process(es). Waiting for file handles to release..."
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 3
     }
+    
+    # 6. Force garbage collection to release any Python file handles
+    try {
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+    } catch {}
     
     $script:backendProcess = $null
     $script:frontendProcess = $null
