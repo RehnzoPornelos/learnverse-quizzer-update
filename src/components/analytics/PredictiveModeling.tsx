@@ -374,9 +374,7 @@ const PredictiveModeling = ({ selectedSectionIds = null }: Props) => {
             title: `Weak topics for ${sec.section}`,
             description: `These quizzes have scores ≤ 75%: ${list}. Provide targeted remediation.`,
             actionItems: [
-              "Run focused review sessions",
-              "Share exemplars and solutions",
-              "Offer remedial practice sets",
+
             ],
             priority: "high",
           });
@@ -387,8 +385,7 @@ const PredictiveModeling = ({ selectedSectionIds = null }: Props) => {
             title: `Commendable topics for ${sec.section}`,
             description: `Students excelled in: ${list}. Preserve teaching approach.`,
             actionItems: [
-              "Document lesson flows",
-              "Share best practices",
+
             ],
             priority: "low",
           });
@@ -398,7 +395,9 @@ const PredictiveModeling = ({ selectedSectionIds = null }: Props) => {
         recs.push({
           title: "Collect more data",
           description: "Insights limited by sample size. Encourage additional quizzes.",
-          actionItems: ["Run diagnostics per topic", "Ensure sections attempt core quizzes"],
+          actionItems: [
+            
+          ],
           priority: "low",
         });
       }

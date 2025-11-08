@@ -4,7 +4,7 @@ import { BookOpen, ShieldCheck, FileText, GraduationCap, LineChart, Upload, User
 const features = [
   {
     name: 'AI Quiz Generator',
-    description: 'Upload PDFs and automatically generate quizzes from your course materials.',
+    description: 'Upload E-Learning Materials and automatically generate quizzes from your course materials.',
     icon: Upload,
   },
   {
@@ -29,7 +29,7 @@ const features = [
   },
   {
     name: 'Multi-Format Questions',
-    description: 'Support for multiple-choice, true/false, and short-answer questions.',
+    description: 'Support for multiple-choice, true/false, identification, essay and short-answer questions.',
     icon: BookOpen,
   },
 ];
