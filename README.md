@@ -26,10 +26,10 @@ The system's main functions includes:
 ## 🚀 How to run
 
 
-1. Download Learnverse as a ZIP file.
-2. Extract the folder.
+1. Download Learnverse as a ZIP file
+2. Extract the folder
 3. Run the QuizLauncher.bat
-4. Start the System
+4. Start the system
 
 
 ---
