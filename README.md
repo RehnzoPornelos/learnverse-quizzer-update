@@ -1,69 +1,49 @@
-# Welcome to your Lovable project
+# 🚀 Learnverse Quiz System
 
-## Project info
+[![Status](https://img.shields.io/badge/status-active-brightgreen.svg)]()
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
+[![Made With](https://img.shields.io/badge/made%20with-💡%20AI-orange.svg)]()
 
-**URL**: https://lovable.dev/projects/3c3b0d52-7525-4a95-bcb4-2256191e88bd
+**Learnverse** is a web-based quiz platform for professors to automatically generate quizzes from e-learning materials, administer them to students to take quizzes with, and analyze student performance with actionable recommendations.
 
-## How can I edit this code?
 
-There are several ways of editing your application.
+---
 
-**Use Lovable**
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/3c3b0d52-7525-4a95-bcb4-2256191e88bd) and start prompting.
+## ✨ Features
 
-Changes made via Lovable will be committed automatically to this repo.
+The system's main purpose is to make a web-based quiz application that can be used by the  professor and be shared with their students.
+The system's main functions includes:
+    - automatic quiz creation through e-learning material (supports question types such as Multiple Choice, True/False, Identification, Short Answer and Essay)
+    - student performance analytics for each sections that the professor handles with detailed insights
+    - provides recommendations of what to do based on the results of student progress
+    - quiz taking can automatically detect tabs or window leaving, preventing cheating
 
-**Use your preferred IDE**
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+---
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
 
-Follow these steps:
+## 🚀 How to run
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+1. Download Learnverse as a ZIP file.
+2. Extract the folder.
+3. Open the '.env.local' file on the Learnverse folder's root
+4. Insert the exact codes given from Secrets.txt
+5. Create a file called '.env' inside the 'backend' folder
+6. Insert the exact codes given from Secrets.txt
+7. Run the QuizLauncher.bat
+8. Start the System
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
 
-# Step 3: Install the necessary dependencies.
-npm i
+---
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
 
-**Edit a file directly in GitHub**
+## 📚 Copyright & Fair Use Disclaimer
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+This project may include third-party copyrighted material used for educational or research purposes.
 
-**Use GitHub Codespaces**
+Under Section 107 of the U.S. Copyright Act (1976), "fair use" permits limited use of copyrighted materials for purposes such as teaching, scholarship, and research. Non-profit and educational uses weigh in favor of fair use, but fair use determinations are fact-specific.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+All rights to third-party materials belong to their respective owners. This project does not claim ownership of such content.
 
-## What technologies are used for this project?
-
-This project is built with .
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/3c3b0d52-7525-4a95-bcb4-2256191e88bd) and click on Share -> Publish.
-
-## I want to use a custom domain - is that possible?
-
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)
+**Copyright © [2025] [Pornelos, Rehnzo P. | Valerio, Mark Francis @ Universidad de Manila]. All rights reserved.**

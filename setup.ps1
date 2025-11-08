@@ -71,26 +71,6 @@ if (Test-Path $req) {
 }
 
 Write-Host "`nInstaller actions finished. Log: $log"
-Write-Host ""
-Write-Host "Choose: (1) start both backend+frontend now, (2) start only backend, (3) do nothing"
-$choice = Read-Host "Enter 1 / 2 / 3"
-
-if ($choice -eq "1") {
-  # Open backend in new PowerShell window (explicit working directory)
-  $bkCmd = "Set-Location -Path `"$PWD`"; cd backend; python -m uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload"
-  Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$bkCmd
-  Start-Sleep -Seconds 1
-  # Open frontend in new PowerShell window
-  $feCmd = "Set-Location -Path `"$PWD`"; npm run dev"
-  Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$feCmd
-  Write-Ok "Launched backend and frontend windows."
-} elseif ($choice -eq "2") {
-  $bkCmd = "Set-Location -Path `"$PWD`"; cd backend; python -m uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload"
-  Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$bkCmd
-  Write-Ok "Launched backend."
-} else {
-  Write-Host "No servers started. You can run start.bat or run commands manually."
-}
 
 Stop-Transcript
 Write-Host "`nDone. See setup.log for details."
