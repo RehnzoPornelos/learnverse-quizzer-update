@@ -229,10 +229,20 @@ function Start-Frontend {
 function Stop-AllServers {
     Update-StatusBar "Stopping servers..."
     
+    # Kill all related processes more aggressively
+    $processesKilled = 0
+    
+    # 1. Stop tracked processes and their children
     if ($script:backendProcess -and -not $script:backendProcess.HasExited) {
         try {
-            # Kill the process tree (includes child processes)
+            # Get all child processes
+            $children = Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $script:backendProcess.Id }
+            foreach ($child in $children) {
+                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+                $processesKilled++
+            }
             Stop-Process -Id $script:backendProcess.Id -Force -ErrorAction SilentlyContinue
+            $processesKilled++
             $backendStatusLabel.Text = "Status: Stopped"
             $backendStatusLabel.ForeColor = [System.Drawing.Color]::Red
         } catch {
@@ -242,8 +252,14 @@ function Stop-AllServers {
     
     if ($script:frontendProcess -and -not $script:frontendProcess.HasExited) {
         try {
-            # Kill the process tree (includes child processes)
+            # Get all child processes
+            $children = Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq $script:frontendProcess.Id }
+            foreach ($child in $children) {
+                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+                $processesKilled++
+            }
             Stop-Process -Id $script:frontendProcess.Id -Force -ErrorAction SilentlyContinue
+            $processesKilled++
             $frontendStatusLabel.Text = "Status: Stopped"
             $frontendStatusLabel.ForeColor = [System.Drawing.Color]::Red
             $frontendLocalLabel.Text = "Local: (not running)"
@@ -254,19 +270,45 @@ function Stop-AllServers {
         }
     }
     
-    # Also kill any orphaned python and node processes related to our servers
+    # 2. Kill any remaining orphaned processes by port
     try {
-        Get-Process | Where-Object {$_.ProcessName -eq "python" -or $_.ProcessName -eq "node"} | ForEach-Object {
-            $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
-            if ($cmdLine -like "*uvicorn*socket_app*" -or $cmdLine -like "*vite*") {
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-            }
+        # Find and kill processes using port 8000 (backend)
+        $backend8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($pid in $backend8000) {
+            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $processesKilled++
+        }
+        
+        # Find and kill processes using port 8080 (frontend)
+        $frontend8080 = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($pid in $frontend8080) {
+            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $processesKilled++
         }
     } catch {}
     
+    # 3. Kill any remaining python/node processes running our servers
+    try {
+        Get-Process | Where-Object {$_.ProcessName -eq "python" -or $_.ProcessName -eq "node"} | ForEach-Object {
+            try {
+                $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
+                if ($cmdLine -like "*uvicorn*socket_app*" -or $cmdLine -like "*vite*" -or $cmdLine -like "*:8000*" -or $cmdLine -like "*:8080*") {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    $processesKilled++
+                }
+            } catch {}
+        }
+    } catch {}
+    
+    # 4. Wait for file handles to be released
+    if ($processesKilled -gt 0) {
+        Update-StatusBar "Stopped $processesKilled process(es). Waiting for file handles to release..."
+        Start-Sleep -Seconds 2
+    }
+    
     $script:backendProcess = $null
     $script:frontendProcess = $null
-    Update-StatusBar "All servers stopped."
+    Update-StatusBar "All servers stopped. Folder should now be unlocked."
 }
 
 # Button Event Handlers
