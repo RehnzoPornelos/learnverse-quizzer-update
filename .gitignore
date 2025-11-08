@@ -10,7 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*
@@ -22,9 +21,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-backend/.env
-.env
-.env.local
 **/__pycache__/
 *.pyc
 node_modules/

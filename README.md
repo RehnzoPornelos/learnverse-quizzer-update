@@ -29,10 +29,9 @@ The system's main functions includes:
 1. Download Learnverse as a ZIP file
 2. Extract the folder from the ZIP
 3. Open and get the environment variables here for testing: https://drive.google.com/drive/folders/1HtYN0sMNAVL0_JfLtRQ_vvpTpf9QAf6K?usp=drive_link
-4. Create a file called '.env' inside the 'backend' folder and insert the environment variables from the drive
-5. Open the '.env.local' file on the Learnverse's root folder and insert the environment variables from the drive
-6. Run the QuizLauncher.bat
-7. Start the system
+4. Paste the environment respectively inside '.env' from the backend folder and '.env.local' on the Learnverse's root folder.
+5. Run the QuizLauncher.bat
+6. Start the system
 
 
 ---
