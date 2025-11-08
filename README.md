@@ -1,7 +1,6 @@
 # 🚀 Learnverse Quiz System
 
 [![Status](https://img.shields.io/badge/status-active-brightgreen.svg)]()
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Made With](https://img.shields.io/badge/made%20with-💡%20AI-orange.svg)]()
 
 **Learnverse** is a web-based quiz platform for professors to automatically generate quizzes from e-learning materials, administer them to students to take quizzes with, and analyze student performance with actionable recommendations.
