@@ -1,5 +1,5 @@
 <# Robust setup.ps1
-   - Forces working folder to script dir
+   - Forces working folder to the script dir
    - Logs to setup.log
    - Avoids inline 'try' expressions that caused errors
    - Uses Get-Command to detect tools

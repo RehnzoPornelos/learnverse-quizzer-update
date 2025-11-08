@@ -27,7 +27,7 @@ The system's main functions includes:
 
 
 1. Download Learnverse as a ZIP file
-2. Extract the folder
+2. Extract the folder from the ZIP
 3. Run the QuizLauncher.bat
 4. Start the system
 
