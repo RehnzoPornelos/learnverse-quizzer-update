@@ -4,6 +4,7 @@
    - Avoids inline 'try' expressions that caused errors
    - Uses Get-Command to detect tools
    - Uses Start-Process safely
+   - Automatically creates environment files
 #>
 
 # Force working folder to script location (fix Explorer double-click cwd issue)
@@ -45,7 +46,7 @@ if ($nodeCmd) { $nodeVer = (& node --version) ; Write-Ok "Node detected: $nodeVe
 if ($npmCmd)  { $npmVer  = (& npm --version) ; Write-Ok "npm detected: $npmVer" } else { Write-Warn "npm not found" }
 if ($pyCmd)   { $pyVer   = (& python --version 2>&1) ; Write-Ok "Python detected: $pyVer" } else { Write-Warn "Python not found" }
 
-# --- Replace your npm-run block with this ---
+# --- npm install ---
 Write-Host "Detected npm source: $($npmCmd.Source) (CommandType: $($npmCmd.CommandType))"
 
 try {
@@ -72,5 +73,36 @@ if (Test-Path $req) {
 
 Write-Host "`nInstaller actions finished. Log: $log"
 
+# Create environment files if they don't exist
+Write-Host "`n== Setting up environment files =="
+
+# Create .env.local for frontend (Vite)
+$envLocalPath = ".\.env.local"
+if (-not (Test-Path $envLocalPath)) {
+  Write-Host "Creating .env.local..."
+  @"
+VITE_SUPABASE_URL=https://tjmtqmwhkqrbscxsegjl.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRqbXRxbXdoa3FyYnNjeHNlZ2psIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQxNjQ1MTQsImV4cCI6MjA1OTc0MDUxNH0.rF4GSIa5I8gVkI3geTtrMaf6KWCsZT2m5RE4Q9lAzn4
+"@ | Out-File -FilePath $envLocalPath -Encoding utf8 -Force
+  Write-Ok ".env.local created successfully"
+} else {
+  Write-Ok ".env.local already exists, skipping"
+}
+
+# Create backend/.env for Python
+$backendEnvPath = ".\backend\.env"
+if (-not (Test-Path $backendEnvPath)) {
+  Write-Host "Creating backend/.env..."
+  @"
+GROQ_API_KEY=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
+SUPABASE_URL=https://tjmtqmwhkqrbscxsegjl.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRqbXRxbXdoa3FyYnNjeHNlZ2psIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQxNjQ1MTQsImV4cCI6MjA1OTc0MDUxNH0.rF4GSIa5I8gVkI3geTtrMaf6KWCsZT2m5RE4Q9lAzn4
+"@ | Out-File -FilePath $backendEnvPath -Encoding utf8 -Force
+  Write-Ok "backend/.env created successfully"
+} else {
+  Write-Ok "backend/.env already exists, skipping"
+}
+
 Stop-Transcript
 Write-Host "`nDone. See setup.log for details."
+Write-Host "Environment files configured. You can now run QuizLauncher.bat to start the system."

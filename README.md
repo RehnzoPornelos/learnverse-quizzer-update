@@ -25,14 +25,11 @@ The system's main functions includes:
 
 ## 🚀 How to run
 
+
 1. Download Learnverse as a ZIP file.
 2. Extract the folder.
-3. Open the '.env.local' file on the Learnverse folder's root
-4. Insert the exact codes given from Secrets.txt
-5. Create a file called '.env' inside the 'backend' folder
-6. Insert the exact codes given from Secrets.txt
-7. Run the QuizLauncher.bat
-8. Start the System
+3. Run the QuizLauncher.bat
+4. Start the System
 
 
 ---
