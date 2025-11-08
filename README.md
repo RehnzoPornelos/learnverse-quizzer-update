@@ -12,11 +12,12 @@
 ## ✨ Features
 
 The system's main purpose is to make a web-based quiz application that can be used by the  professor and be shared with their students.
+
 The system's main functions includes:
-    - automatic quiz creation through e-learning material (supports question types such as Multiple Choice, True/False, Identification, Short Answer and Essay)
-    - student performance analytics for each sections that the professor handles with detailed insights
-    - provides recommendations of what to do based on the results of student progress
-    - quiz taking can automatically detect tabs or window leaving, preventing cheating
+* automatic quiz creation through e-learning material (supports question types such as Multiple Choice, True/False, Identification, Short Answer and Essay)
+* student performance analytics for each sections that the professor handles with detailed insights
+* provides recommendations of what to do based on the results of student progress
+* quiz taking can automatically detect tabs or window leaving, preventing cheating
 
 
 ---
