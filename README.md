@@ -28,11 +28,8 @@ The system's main functions includes:
 1. Download Learnverse as a ZIP file
 2. Extract the folder from the ZIP
 3. Open and get the environment variables here for testing: https://drive.google.com/drive/folders/1HtYN0sMNAVL0_JfLtRQ_vvpTpf9QAf6K?usp=drive_link
-4. Create a file called '.env' inside the 'backend' folder and insert:
-GROQ_API_KEY=your_groq_api_key
-SUPABASE_URL=your_supabase_url
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-5. Open the '.env.local' file on the Learnverse's root folder and insert:
+4. Create a file called '.env' inside the 'backend' folder and insert the environment variables from the drive
+5. Open the '.env.local' file on the Learnverse's root folder and insert the environment variables from the drive
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 6. Run the QuizLauncher.bat
