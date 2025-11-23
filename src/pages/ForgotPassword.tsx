@@ -26,7 +26,6 @@ const ForgotPassword = () => {
   // pick the password site first (8080), then fall back to backend or current origin
   const APP_URL =
     import.meta.env.VITE_PASSWORD_URL ||
-    import.meta.env.VITE_BACKEND_URL ||
     window.location.origin;
 
   // ensure no trailing slash, then add /reset-password

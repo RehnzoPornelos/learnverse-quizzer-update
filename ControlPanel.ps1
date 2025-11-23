@@ -138,14 +138,27 @@ function Update-StatusBar {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
-function Get-LocalIP {
+function Get-BackendURL {
+    $envFile = Join-Path -Path $PSScriptRoot -ChildPath ".env.local"
+
+    if (Test-Path $envFile) {
+        $content = Get-Content $envFile
+        $line = $content | Where-Object { $_ -match "^VITE_BACKEND_URL=" }
+
+        if ($line) {
+            $url = $line -replace "VITE_BACKEND_URL=", ""
+            return $url
+        }
+    }
+
+    # Fallback (only if env not found)
+    return "http://localhost:8000"
+}
+
+function Get-BackendIP {
+    $url = Get-BackendURL
     try {
-        $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
-            $_.InterfaceAlias -notlike "*Loopback*" -and 
-            $_.IPAddress -like "192.168.*"
-        } | Select-Object -First 1).IPAddress
-        if ($ip) { return $ip }
-        return "localhost"
+        return ([System.Uri]$url).Host
     } catch {
         return "localhost"
     }
